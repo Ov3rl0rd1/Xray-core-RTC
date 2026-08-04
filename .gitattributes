@@ -1,0 +1,6 @@
+# go.sum is an unordered set of module hashes: upstream adds lines for its
+# dependency bumps, this fork adds lines for the olcrtc dependencies, and both
+# sides land in the same region of the file. A union merge keeps every line from
+# both sides, which is exactly the right answer for a hash set -- `go mod tidy`
+# afterwards drops whatever is no longer referenced.
+go.sum merge=union

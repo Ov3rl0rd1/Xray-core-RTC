@@ -86,9 +86,9 @@ func SmuxConfig(maxWirePayload int) *smux.Config {
 // (vp8channel/goolom publisher-PC reconnect + SFU renegotiation). A tight
 // timeout would tear down the smux session while the carrier is rebuilding
 // itself, forcing an unnecessary second reconnect. Only transports that
-// implement transport.ControlPlane use this; conventional carriers
-// (jitsi/datachannel) keep the conservative 30s timeout so a genuinely dead
-// link is detected and reconnected promptly.
+// implement transport.ControlPlane use this; the others keep the
+// conservative 30s timeout so a genuinely dead link is detected and
+// reconnected promptly.
 func SmuxConfigLong(maxWirePayload int) *smux.Config {
 	cfg := SmuxConfig(maxWirePayload)
 	cfg.KeepAliveTimeout = 120 * time.Second

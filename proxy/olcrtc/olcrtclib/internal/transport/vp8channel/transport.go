@@ -83,8 +83,7 @@ var vp8Keepalive = []byte{ //nolint:gochecknoglobals // package-level state inte
 // though the SFU forwards every frame to every participant: a receiver drops
 // any frame whose dst is non-zero and not its own epoch. dst==0 is a broadcast
 // used before the sender has learned the receiver's epoch (CLIENT_HELLO and
-// the server's pre-latch frames). This mirrors the src+dst scheme the jitsi
-// engine already uses (internal/engine/jitsi).
+// the server's pre-latch frames).
 const (
 	tokenOff    = 20
 	srcOff      = 24

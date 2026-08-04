@@ -5,9 +5,9 @@
       "tag": "olcrtc-in",
       "protocol": "olcrtc",
       "settings": {
-        "provider": "jitsi",
-        "transport": "datachannel",
-        "roomId": "https://meet.small-dm.ru/",
+        "provider": "wbstream",
+        "transport": "vp8channel",
+        "roomId": "REPLACE_WITH_ROOM_ID",
         "key": "REPLACE_WITH_64_HEX_CHARS",
         "dnsServer": "8.8.8.8:53"
       }

@@ -100,6 +100,8 @@ jobs:
       # the same source and with the same digest check scheduled-assets-update.yml
       # uses.
       - name: Download Geodat if not restored from cache
+        # This job also runs on windows-latest, where the default shell is pwsh.
+        shell: bash
         run: |
           [ -d 'resources' ] || mkdir resources
           for NAME in geoip geosite

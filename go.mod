@@ -16,7 +16,6 @@ require (
 	github.com/livekit/server-sdk-go/v2 v2.17.0
 	github.com/miekg/dns v1.1.72
 	github.com/pelletier/go-toml v1.9.5
-	github.com/pion/ice/v4 v4.2.7
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/logging v0.2.4
 	github.com/pion/rtp v1.10.3
@@ -34,7 +33,6 @@ require (
 	github.com/xtaci/smux v1.5.57
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 	github.com/zarazaex69/gr v0.1.5
-	github.com/zarazaex69/j v0.0.0-20260615090630-e98457d32f7f
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.54.0
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
@@ -64,7 +62,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dennwc/iters v1.2.2 // indirect
 	github.com/frostbyte73/core v0.1.1 // indirect
@@ -91,6 +88,7 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
+	github.com/pion/ice/v4 v4.2.7 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect

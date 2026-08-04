@@ -13,7 +13,7 @@
 //   - Letting smux's sendLoop call Write once per frame; we encrypt and hand
 //     the whole buffer to the link as a single message. Length boundaries
 //     are preserved end-to-end by the transport (KCP length-prefix framing
-//     in vp8channel, native message boundaries in datachannel).
+//     in vp8channel, frame headers in the video-track transports).
 package muxconn
 
 import (
@@ -44,9 +44,9 @@ const (
 
 	// pooledFrameCap is the capacity each pooled plaintext buffer is born
 	// with. It is sized to fit the largest smux frame any of our
-	// transports will deliver after AEAD overhead is stripped (datachannel
-	// caps at 12 KiB on the wire, vp8channel at 60 KiB; we round up to
-	// give Open room to write in place without growing the slice).
+	// transports will deliver after AEAD overhead is stripped (vp8channel
+	// caps at 60 KiB on the wire; we round up to give Open room to write in
+	// place without growing the slice).
 	pooledFrameCap = 64 * 1024
 )
 

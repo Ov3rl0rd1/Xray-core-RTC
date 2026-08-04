@@ -96,7 +96,7 @@ type Crypto struct {
 
 // Net groups network and transport selection.
 type Net struct {
-	Transport string `yaml:"transport"` // datachannel, videochannel, seichannel, vp8channel
+	Transport string `yaml:"transport"` // videochannel, seichannel, vp8channel
 	DNS       string `yaml:"dns"`
 }
 
@@ -114,7 +114,7 @@ type SOCKS struct {
 
 // Engine selects a direct SFU connection when Auth.Provider is "none".
 type Engine struct {
-	Name  string `yaml:"name"` // livekit, goolom, jitsi
+	Name  string `yaml:"name"` // livekit, goolom
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
 }

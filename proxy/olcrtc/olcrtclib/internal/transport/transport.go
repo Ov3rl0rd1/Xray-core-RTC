@@ -1,8 +1,8 @@
 // Package transport defines transport abstractions and registry.
 //
-// A transport encodes byte payloads onto a carrier (engine) primitive - either
-// a reliable byte stream (datachannel) or a video track (videochannel,
-// seichannel, vp8channel). Transport-specific tuning lives in per-transport
+// A transport encodes byte payloads onto a carrier (engine) primitive - a
+// video track (videochannel, seichannel, vp8channel).
+// Transport-specific tuning lives in per-transport
 // Options types; the common configuration shared by every transport lives in
 // [Config].
 package transport
@@ -96,7 +96,7 @@ type PeerReadyTransport interface {
 // Options is a marker for per-transport option structs. Each transport package
 // defines its own Options type (e.g. videochannel.Options) and registers a
 // factory that consumes it via type assertion. A nil Options is valid for
-// transports that need no extra configuration (e.g. datachannel).
+// transports that need no extra configuration.
 type Options interface {
 	TransportOptions()
 }

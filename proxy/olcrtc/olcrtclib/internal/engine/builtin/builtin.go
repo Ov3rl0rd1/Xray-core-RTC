@@ -12,12 +12,10 @@ import (
 	"fmt"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/auth"
-	authJitsi "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/auth/jitsi"
 	authTelemost "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/auth/telemost"
 	authWBStream "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/auth/wbstream"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
 	_ "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine/goolom"  // register goolom engine via init
-	_ "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine/jitsi"   // register jitsi engine via init
 	_ "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine/livekit" // register livekit engine via init
 )
 
@@ -78,12 +76,11 @@ func Available() []string {
 	return names
 }
 
-// RegisterDefaults wires the built-in carriers: jitsi, telemost, wbstream
-// and "none" (direct engine access).
+// RegisterDefaults wires the built-in carriers: telemost, wbstream and "none"
+// (direct engine access).
 func RegisterDefaults() {
 	registerEngineAuth("wbstream", authWBStream.Provider{})
 	registerEngineAuth("telemost", authTelemost.Provider{})
-	registerEngineAuth("jitsi", authJitsi.Provider{})
 	registerDirect("none")
 }
 

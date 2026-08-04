@@ -59,11 +59,11 @@ type VideoOptions struct {
 // outbound client and the inbound server; fields that only apply to one side
 // are documented as such.
 type Config struct {
-	// Provider selects the disguise/auth provider: "jitsi", "telemost",
-	// "wbstream", or "none" for direct engine mode.
+	// Provider selects the disguise/auth provider: "telemost", "wbstream",
+	// or "none" for direct engine mode.
 	Provider string
-	// Transport selects the WebRTC carrier encoding: "datachannel",
-	// "vp8channel", "seichannel", or "videochannel".
+	// Transport selects the WebRTC carrier encoding: "vp8channel",
+	// "seichannel", or "videochannel".
 	Transport string
 	// RoomID is the conference room reference for the provider. Required unless
 	// Provider is "none".
@@ -76,7 +76,7 @@ type Config struct {
 	AuthToken string
 
 	// Direct engine mode (Provider == "none").
-	Engine string // "livekit", "goolom", "jitsi"
+	Engine string // "livekit" or "goolom"
 	URL    string
 	Token  string
 

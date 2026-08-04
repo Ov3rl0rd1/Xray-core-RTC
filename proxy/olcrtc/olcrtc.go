@@ -11,7 +11,7 @@
 //     Xray's router (so routing, DNS, sniffing and stats all apply).
 //
 // Traffic is disguised as an ordinary video call on an allowed SFU service
-// (Jitsi, Yandex Telemost, WbStream) and additionally encrypted with a shared
+// (Yandex Telemost, WbStream) and additionally encrypted with a shared
 // XChaCha20-Poly1305 key.
 package olcrtc
 

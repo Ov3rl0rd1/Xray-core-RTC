@@ -34,8 +34,8 @@ const (
 	// ping byte can be head-of-line blocked behind queued data for several
 	// seconds, which is liveness-OK, not a dead link.
 	//
-	// Conservative default: a conventional carrier (jitsi/datachannel) that
-	// goes silent this long is genuinely dead and should reconnect promptly.
+	// Conservative default: a carrier that shares one plane and goes silent
+	// this long is genuinely dead and should reconnect promptly.
 	// Video-paced transports with isolated control planes (vp8channel) need a
 	// longer window because KCP batching + frame pacing can delay control
 	// packets under load (issue #95); that relaxed window is applied per

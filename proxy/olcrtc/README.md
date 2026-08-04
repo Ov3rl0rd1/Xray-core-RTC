@@ -5,7 +5,7 @@ encrypted TCP‑over‑WebRTC tunnel into this Xray fork as a first‑class prox
 protocol, with **both** a client (outbound) and a server (inbound).
 
 Traffic is disguised as an ordinary video call on an allowed SFU service
-(Jitsi Meet, Yandex Telemost, WbStream) and additionally encrypted end‑to‑end
+(Yandex Telemost, WbStream) and additionally encrypted end‑to‑end
 with a shared XChaCha20‑Poly1305 key. Inside the call it multiplexes many TCP
 connections (smux) over the WebRTC data/video channel.
 
@@ -51,9 +51,9 @@ shown below.
 
 | Field | Type | Req. | Default | Notes |
 |-------|------|:----:|---------|-------|
-| `provider` | string | ✅ | — | `jitsi`, `telemost`, `wbstream`, or `none`. See [Providers](#providers). |
-| `transport` | string | ✅ | — | `datachannel`, `vp8channel`, `seichannel`, `videochannel`. See [Transports](#transports--speed). |
-| `roomId` | string | ✅¹ | — | Room reference for the provider. ¹Required unless `provider:"none"`. Jitsi: full room URL. Telemost/WbStream: room ID created on the service site. |
+| `provider` | string | ✅ | — | `telemost`, `wbstream`, or `none`. See [Providers](#providers). |
+| `transport` | string | ✅ | — | `vp8channel`, `seichannel`, `videochannel`. See [Transports](#transports--speed). |
+| `roomId` | string | ✅¹ | — | Room reference for the provider. ¹Required unless `provider:"none"`. Telemost/WbStream: room ID created on the service site. |
 | `key` | string | ✅ | — | 64 hex chars (32‑byte shared key). `openssl rand -hex 32`. **Identical on both sides.** |
 | `dnsServer` | string | — | system | Resolver used to reach the SFU, e.g. `8.8.8.8:53`. |
 | `authToken` | string | — | — | Provider account token (mainly WbStream). See [Providers](#providers). |
@@ -62,7 +62,7 @@ shown below.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `engine` | string | `livekit`, `goolom`, or `jitsi`. |
+| `engine` | string | `livekit` or `goolom`. |
 | `url` | string | Signaling/SFU URL. |
 | `token` | string | Pre‑issued engine token/JWT. |
 
@@ -124,9 +124,8 @@ told to reconnect). Use the same liveness/lifecycle values on both sides.
 
 | Provider | Underlying engine | Room / auth | Notes |
 |----------|-------------------|-------------|-------|
-| **`jitsi`** | Jitsi (colibri‑ws / Jingle) | Room **URL**, no registration | Public/self‑hosted Jitsi Meet. Simplest; `datachannel` is stable. Try `meet.small-dm.ru`, `meet1.arbitr.ru`, `meet.handyweb.org`, `meet.jit.si` — check which is reachable on your network. |
-| **`telemost`** | goolom | Room ID from Yandex Telemost | Only **`vp8channel`** is stable; DataChannel was removed from Telemost. |
-| **`wbstream`** | livekit | Room ID from stream.wb.ru; optional `authToken` | Guest tokens carry `canPublishData=false`, so `datachannel` needs a **moderator/account `authToken`** on both sides; otherwise use `vp8channel`/`seichannel`/`videochannel`. |
+| **`telemost`** | goolom | Room ID from Yandex Telemost | Only **`vp8channel`** is stable. |
+| **`wbstream`** | livekit | Room ID from stream.wb.ru; optional `authToken` | Guest tokens carry `canPublishData=false`. Use `vp8channel`/`seichannel`/`videochannel`. |
 | **`none`** | set by `engine` | `url` + `token` | Direct engine mode; bypass the provider auth flow and talk to an SFU directly. |
 
 > Always confirm the SFU service you pick is reachable/allowed on your network.
@@ -139,7 +138,6 @@ told to reconnect). Use the same liveness/lifecycle values on both sides.
 
 | Transport | How it carries data | Needs |
 |-----------|---------------------|-------|
-| **`datachannel`** | Native SCTP/data path of the engine | — |
 | **`vp8channel`** | KCP over VP8‑like video frames | — |
 | **`seichannel`** | Payload in H.264 SEI NAL units, with ACK/retry | — |
 | **`videochannel`** | Bytes rendered as QR/tile frames via ffmpeg, with ACK/retry | `ffmpeg` (`tile` ⇒ 1080×1080) |
@@ -148,29 +146,25 @@ told to reconnect). Use the same liveness/lifecycle values on both sides.
 
 Which transport works on which provider (from olcRTC's E2E suite):
 
-| Transport | telemost | wbstream | jitsi |
-|-----------|:--------:|:--------:|:-----:|
-| `datachannel` | ✗ | ~¹ | ✅ |
-| `vp8channel` | ✅ | ✅ | ~ |
-| `seichannel` | ✗ | ✅ | ~² |
-| `videochannel` | ✅ | ✅ | ~ |
+| Transport | telemost | wbstream |
+|-----------|:--------:|:--------:|
+| `vp8channel` | ✅ | ✅ |
+| `seichannel` | ✗ | ✅ |
+| `videochannel` | ✅ | ✅ |
 
 ✅ works · ~ unstable (may work) · ✗ not supported.
-¹ WbStream `datachannel` needs a moderator/account `authToken` on both sides.
-² Jitsi + `seichannel` can flap with `ack timeout` when the room has no active receiver.
 
 ### Relative speed & server cost
 
 olcRTC ranks throughput strictly as:
 
-> **`datachannel` > `vp8channel` > `seichannel` > `videochannel`**
+> **`vp8channel` > `seichannel` > `videochannel`**
 
 Absolute numbers depend heavily on the **SFU, the network path, and CPU**, so
 treat the bands below as order‑of‑magnitude guidance, not guarantees:
 
 | Transport | Rough throughput\* | Server CPU / RAM | Why |
 |-----------|--------------------|------------------|-----|
-| `datachannel` | Highest — tens of Mbit/s feasible | **Lowest** | Direct reliable data channel; no video encode. |
 | `vp8channel` | A few Mbit/s (scales with `fps`×`batchSize` and the SFU's video bitrate) | Medium | KCP framing + VP8‑style pacing. |
 | `seichannel` | Below vp8channel | Medium–high | Data embedded in an H.264 stream + ACK/retry overhead. |
 | `videochannel` | Lowest — often sub‑Mbit/s | **Highest** (spawns ffmpeg) | Bytes go through image (QR/tile) encode/decode. Experimental. |
@@ -181,9 +175,8 @@ treat the bands below as order‑of‑magnitude guidance, not guarantees:
 and `bitrate` for more throughput; lower `fps` to cut CPU. `videochannel` is the
 most CPU‑hungry because of ffmpeg and is best treated as a fallback.
 
-**Recommended:** start with **`jitsi + datachannel`** (stable, no registration,
-lowest overhead). For commercial/guest scenarios use **`wbstream + vp8channel`**;
-for **Telemost** use **`vp8channel`**.
+**Recommended:** start with **`wbstream + vp8channel`**; for **Telemost** use
+**`vp8channel`**.
 
 ---
 
@@ -206,7 +199,7 @@ the inbound validates it:
 Set the identity on the client outbound:
 
 ```json
-"settings": { "provider": "jitsi", "transport": "datachannel",
+"settings": { "provider": "wbstream", "transport": "vp8channel",
   "roomId": "https://meet.example/room", "key": "<64 hex>",
   "deviceId": "alice@myapp" }
 ```
@@ -312,7 +305,7 @@ Validate any config with `xray run -test -c config.json`. Minimal ready‑to‑e
 files live in [`example/client.json`](example/client.json) and
 [`example/server.json`](example/server.json).
 
-### Client outbound (jitsi + datachannel, recommended)
+### Client outbound (wbstream + vp8channel, recommended)
 
 ```json
 {
@@ -324,7 +317,7 @@ files live in [`example/client.json`](example/client.json) and
   ],
   "outbounds": [
     { "tag": "olcrtc-out", "protocol": "olcrtc", "settings": {
-        "provider": "jitsi", "transport": "datachannel",
+        "provider": "wbstream", "transport": "vp8channel",
         "roomId": "https://meet.small-dm.ru/REPLACE_ROOM",
         "key": "REPLACE_WITH_64_HEX",
         "dnsServer": "8.8.8.8:53",
@@ -366,7 +359,7 @@ and the gRPC API your app drives:
       "settings": { "users": [] } },
 
     { "tag": "olcrtc-in", "protocol": "olcrtc", "settings": {
-        "provider": "jitsi", "transport": "datachannel",
+        "provider": "wbstream", "transport": "vp8channel",
         "roomId": "https://meet.small-dm.ru/REPLACE_ROOM",
         "key": "REPLACE_WITH_64_HEX",
         "dnsServer": "8.8.8.8:53"
@@ -424,8 +417,8 @@ import (
 out := &core.OutboundHandlerConfig{
     Tag: "olcrtc-out",
     ProxySettings: serial.ToTypedMessage(&olcrtc.ClientConfig{
-        Provider:  "jitsi",
-        Transport: "datachannel",
+        Provider:  "wbstream",
+        Transport: "vp8channel",
         RoomId:    "https://meet.small-dm.ru/my-room",
         Key:       key64hex,
         DnsServer: "8.8.8.8:53",
@@ -469,7 +462,7 @@ exposed through [`olcrtclib/bridge`](olcrtclib/bridge) (`bridge.StartClient` /
 - **`videochannel` needs `ffmpeg`** on the host (and `codec:"tile"` needs
   1080×1080).
 - The `example/*.json` demo room `meet.small-dm.ru` may be down; substitute a
-  Jitsi/Telemost/WbStream endpoint that works on your network.
+  Telemost/WbStream endpoint that works on your network.
 
 ---
 

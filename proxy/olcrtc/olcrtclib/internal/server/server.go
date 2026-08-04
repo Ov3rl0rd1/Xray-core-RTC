@@ -581,7 +581,7 @@ func (s *Server) buildReplacementSession() *replacementSession {
 // because another reinstall already swapped in a fresh session - i.e. dead
 // matches neither the live data session nor the live control session. A nil
 // dead (carrier-triggered reconnect) always proceeds. The dying session may be
-// the data session (legacy/datachannel path) or the control session
+// the data session (legacy single-plane path) or the control session
 // (control-plane transports, where s.session is nil in peer-routing mode).
 // Matching against controlSess is what keeps a control-session reinstall from
 // being silently dropped; without it acceptHandshake was never re-armed and
@@ -1155,7 +1155,7 @@ func (s *Server) servePeer(ps *peerSession) {
 // establishPeerSession ensures the per-peer handshake has completed. When a
 // per-peer control smux session was set up by getOrCreatePeerControlSession,
 // the sessionReady channel signals completion; otherwise the handshake runs
-// inline on the data smux session (legacy / datachannel path).
+// inline on the data smux session (legacy single-plane path).
 func (s *Server) establishPeerSession(ps *peerSession) bool {
 	// Per-peer control plane path: sessionReady is closed by acceptPeerHandshake.
 	if ps.sessionReady != nil {

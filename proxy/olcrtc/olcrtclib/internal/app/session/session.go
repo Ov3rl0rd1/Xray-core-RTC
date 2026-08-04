@@ -20,7 +20,6 @@ import (
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/server"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport/datachannel"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport/seichannel"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport/videochannel"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport/vp8channel"
@@ -64,7 +63,7 @@ var (
 	ErrAmountRequired = errors.New("amount required for gen mode (set gen.amount)")
 	// ErrAuthRequired indicates that no auth provider was selected.
 	ErrAuthRequired = errors.New(
-		"auth provider required (set auth.provider to jitsi, telemost, wbstream or none)")
+		"auth provider required (set auth.provider to telemost, wbstream or none)")
 	// ErrURLRequired indicates that auth.url must be provided when the auth provider has no default URL.
 	ErrURLRequired = errors.New("SFU URL required (set auth.url)")
 	// ErrUnsupportedCarrier indicates that carrier is not registered.
@@ -74,7 +73,7 @@ var (
 
 	// ErrTransportRequired indicates that transport is not provided.
 	ErrTransportRequired = errors.New(
-		"transport required (set transport to datachannel, videochannel, seichannel or vp8channel)")
+		"transport required (set transport to videochannel, seichannel or vp8channel)")
 	// ErrKeyRequired indicates that encryption key is not provided.
 	ErrKeyRequired = errors.New("key required (set crypto.key)")
 	// ErrDNSServerRequired indicates that dns server is not provided.
@@ -221,7 +220,6 @@ type Config struct {
 // RegisterDefaults registers built-in carriers and transports.
 func RegisterDefaults() {
 	enginebuiltin.RegisterDefaults()
-	transport.Register("datachannel", datachannel.New)
 	transport.Register("videochannel", videochannel.New)
 	transport.Register("seichannel", seichannel.New)
 	transport.Register("vp8channel", vp8channel.New)

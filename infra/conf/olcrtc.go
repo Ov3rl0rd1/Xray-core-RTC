@@ -72,10 +72,10 @@ type OLCRTCClientConfig struct {
 
 func (c *olcrtcCommon) validate() error {
 	if c.Provider == "" {
-		return errors.New("olcrtc: provider is required (jitsi, telemost, wbstream or none)")
+		return errors.New("olcrtc: provider is required (telemost, wbstream or none)")
 	}
 	if c.Transport == "" {
-		return errors.New("olcrtc: transport is required (datachannel, vp8channel, seichannel or videochannel)")
+		return errors.New("olcrtc: transport is required (vp8channel, seichannel or videochannel)")
 	}
 	if c.Key == "" {
 		return errors.New("olcrtc: key is required (64 hex chars)")

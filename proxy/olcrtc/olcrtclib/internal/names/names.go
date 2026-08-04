@@ -18,7 +18,7 @@ var embeddedNames string
 var embeddedSurnames string
 
 var (
-	firstNames = parseEmbedded(embeddedNames) //nolint:gochecknoglobals // package-level state intentional
+	firstNames = parseEmbedded(embeddedNames)    //nolint:gochecknoglobals // package-level state intentional
 	lastNames  = parseEmbedded(embeddedSurnames) //nolint:gochecknoglobals // package-level state intentional
 )
 

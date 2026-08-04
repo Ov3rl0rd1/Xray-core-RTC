@@ -30,13 +30,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/protect"
 	"github.com/pion/ice/v4"
 	pioninterceptor "github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/protect"
 	"github.com/zarazaex69/j"
 )
 
@@ -80,8 +80,10 @@ const (
 // Without it, a stray peer's smux/handshake bytes parse as our protocol and
 // deadlock the connection. 4 bytes is enough entropy for collision avoidance
 // against real-world payloads while keeping the overhead negligible.
-var bridgeMagic = [4]byte{'O', 'L', 'R', '1'} //nolint:gochecknoglobals // protocol constant
-var fallbackEpoch atomic.Uint32               //nolint:gochecknoglobals // crypto/rand fallback counter
+var (
+	bridgeMagic   = [4]byte{'O', 'L', 'R', '1'} //nolint:gochecknoglobals // protocol constant
+	fallbackEpoch atomic.Uint32                 //nolint:gochecknoglobals // crypto/rand fallback counter
+)
 
 // vp8Keepalive is a minimal valid VP8 keyframe. It carries no useful picture
 // data but parses as a genuine VP8 bitstream, so JVB accepts it as real media

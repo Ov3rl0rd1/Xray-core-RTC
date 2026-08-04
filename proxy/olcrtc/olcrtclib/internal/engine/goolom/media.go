@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 	"github.com/pion/webrtc/v4"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 )
 
 func (s *Session) setupDataChannelHandlers(dcReady chan struct{}, sessionCloseCh chan struct{}) {

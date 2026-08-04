@@ -18,15 +18,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
+	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
 	enginebuiltin "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine/builtin"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport/common"
-	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
-	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 const (
@@ -285,18 +285,18 @@ func newStreamTransport(
 		batchSize = defaultBatchSize
 	}
 	tr := &streamTransport{
-		stream:          stream,
-		track:           track,
-		onData:          cfg.OnData,
-		onPeerData:      cfg.OnPeerData,
-		outbound:        make(chan []byte, outboundQueueSize),
-		controlOutbound: make(chan []byte, controlOutboundQueueSize),
-		closeCh:         make(chan struct{}),
-		writerDone:      make(chan struct{}),
-		frameInterval:   time.Second / time.Duration(fps),
-		batchSize:       batchSize,
-		bindingToken:    bindingToken(cfg.RoomURL),
-		localEpoch:      randomEpoch(),
+		stream:           stream,
+		track:            track,
+		onData:           cfg.OnData,
+		onPeerData:       cfg.OnPeerData,
+		outbound:         make(chan []byte, outboundQueueSize),
+		controlOutbound:  make(chan []byte, controlOutboundQueueSize),
+		closeCh:          make(chan struct{}),
+		writerDone:       make(chan struct{}),
+		frameInterval:    time.Second / time.Duration(fps),
+		batchSize:        batchSize,
+		bindingToken:     bindingToken(cfg.RoomURL),
+		localEpoch:       randomEpoch(),
 		peers:            make(map[uint32]*kcpRuntime),
 		peerOut:          make(map[uint32]chan []byte),
 		ctrlPeers:        make(map[uint32]*peerControlKCP),

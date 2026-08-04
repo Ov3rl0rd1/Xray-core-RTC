@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/framing"
@@ -24,7 +25,6 @@ import (
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/names"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
-	"github.com/xtaci/smux"
 )
 
 const connectCommand = "connect"

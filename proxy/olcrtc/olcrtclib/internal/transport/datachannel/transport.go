@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pion/webrtc/v4"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
 	enginebuiltin "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine/builtin"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
-	"github.com/pion/webrtc/v4"
 )
 
 const defaultMaxPayloadSize = 12 * 1024

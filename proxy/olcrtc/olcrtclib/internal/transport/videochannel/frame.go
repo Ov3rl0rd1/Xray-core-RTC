@@ -56,7 +56,6 @@ type transportFrame struct {
 	payload   []byte
 }
 
-
 func encodeDataFrameForBinding(
 	role byte,
 	binding uint32,

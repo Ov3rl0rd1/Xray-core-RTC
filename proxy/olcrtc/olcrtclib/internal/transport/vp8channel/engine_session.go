@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
 	"github.com/pion/webrtc/v4"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/engine"
 )
 
 // engineVideoSession adapts engine.Session + engine.VideoTrackCapable to the
@@ -42,7 +42,7 @@ func (v *engineVideoSession) SetEndedCallback(cb func(string))  { v.session.SetE
 func (v *engineVideoSession) WatchConnection(ctx context.Context) {
 	v.session.WatchConnection(ctx)
 }
-func (v *engineVideoSession) CanSend() bool   { return v.session.CanSend() }
+func (v *engineVideoSession) CanSend() bool           { return v.session.CanSend() }
 func (v *engineVideoSession) SubscriberCanSend() bool { return v.session.SubscriberCanSend() }
 
 func (v *engineVideoSession) Reconnect(reason string) { v.session.Reconnect(reason) }

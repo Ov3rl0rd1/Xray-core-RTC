@@ -4,3 +4,9 @@
 # both sides, which is exactly the right answer for a hash set -- `go mod tidy`
 # afterwards drops whatever is no longer referenced.
 go.sum merge=union
+
+# Go sources check out with LF even on Windows (core.autocrlf would otherwise
+# hand them over as CRLF). gofumpt rewrites CRLF to LF, so without this every
+# file looks unformatted locally while CI, which checks out LF, sees the real
+# handful -- and `go run ./infra/vformat/main.go` would rewrite the whole tree.
+*.go text eol=lf

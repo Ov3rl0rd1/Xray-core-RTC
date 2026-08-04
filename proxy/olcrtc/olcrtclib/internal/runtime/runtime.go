@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
-	"github.com/xtaci/smux"
 )
 
 const (

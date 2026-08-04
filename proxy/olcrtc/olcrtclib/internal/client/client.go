@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xtaci/smux"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/handshake"
@@ -24,7 +25,6 @@ import (
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/names"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
-	"github.com/xtaci/smux"
 )
 
 var (
@@ -51,9 +51,9 @@ var (
 
 // Client handles local SOCKS5 connections and tunnels them to the server.
 type Client struct {
-	ln          transport.Transport
-	cipher      *crypto.Cipher
-	conn        *muxconn.Conn
+	ln     transport.Transport
+	cipher *crypto.Cipher
+	conn   *muxconn.Conn
 	// controlConn is a separate muxconn wired to the transport's control-plane
 	// channel (transport.ControlPlane). When non-nil, the smux control session
 	// runs over it instead of the bulk data conn, eliminating head-of-line

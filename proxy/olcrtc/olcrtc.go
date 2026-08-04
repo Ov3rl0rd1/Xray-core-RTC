@@ -72,17 +72,17 @@ func clientBridgeConfig(c *ClientConfig) bridge.Config {
 // serverBridgeConfig maps the inbound proto config to a bridge.Config.
 func serverBridgeConfig(c *ServerConfig) bridge.Config {
 	return bridge.Config{
-		Provider:           c.GetProvider(),
-		Transport:          c.GetTransport(),
-		RoomID:             c.GetRoomId(),
-		KeyHex:             c.GetKey(),
-		DNSServer:          c.GetDnsServer(),
-		AuthToken:          c.GetAuthToken(),
-		Engine:             c.GetEngine(),
-		URL:                c.GetUrl(),
-		Token:              c.GetToken(),
-		VP8:                &bridge.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())},
-		SEI:                seiOptions(c.GetSeiFps(), c.GetSeiBatchSize(), c.GetSeiFragmentSize(), c.GetSeiAckTimeoutMs()),
+		Provider:  c.GetProvider(),
+		Transport: c.GetTransport(),
+		RoomID:    c.GetRoomId(),
+		KeyHex:    c.GetKey(),
+		DNSServer: c.GetDnsServer(),
+		AuthToken: c.GetAuthToken(),
+		Engine:    c.GetEngine(),
+		URL:       c.GetUrl(),
+		Token:     c.GetToken(),
+		VP8:       &bridge.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())},
+		SEI:       seiOptions(c.GetSeiFps(), c.GetSeiBatchSize(), c.GetSeiFragmentSize(), c.GetSeiAckTimeoutMs()),
 		Video: &bridge.VideoOptions{
 			Width:      int(c.GetVideoWidth()),
 			Height:     int(c.GetVideoHeight()),

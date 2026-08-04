@@ -95,5 +95,24 @@ jobs:
           path: resources
           key: xray-geodat-
           enableCrossOsArchive: true
+      # TestGeodataConfig reads resources/geoip.dat, which only ever arrives via
+      # the cache above. Fetch it directly when the restore comes up empty, from
+      # the same source and with the same digest check scheduled-assets-update.yml
+      # uses.
+      - name: Download Geodat if not restored from cache
+        run: |
+          [ -d 'resources' ] || mkdir resources
+          for NAME in geoip geosite
+          do
+            if [ -s "./resources/${NAME}.dat" ]; then
+              echo -e "${NAME}.dat restored from cache."
+              continue
+            fi
+            echo -e "${NAME}.dat is not in the cache, downloading..."
+            HASH="$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${NAME}.dat.sha256sum" | awk -F ' ' '{print $1}')"
+            curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${NAME}.dat" -o "./resources/${NAME}.dat"
+            echo -e "Verifying HASH key..."
+            [ "$(sha256sum "./resources/${NAME}.dat" | awk -F ' ' '{print $1}')" == "${HASH}" ] || { echo -e "The HASH key of ${NAME}.dat does not match cloud one."; exit 1; }
+          done
       - name: Test
         run: go test -timeout 1h -v ./...

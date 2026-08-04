@@ -237,6 +237,50 @@ jobs:
           path: resources
           key: xray-wintun-
 
+      # The caches above are populated by scheduled-assets-update.yml. A fork
+      # that has never run that workflow (or whose cache has been evicted) gets
+      # an empty restore, and packaging would then fail on a missing file. Fetch
+      # the assets directly in that case, from the same sources and with the
+      # same digest checks the scheduled workflow uses.
+      - name: Download Geodat if not restored from cache
+        run: |
+          [ -d 'resources' ] || mkdir resources
+          for NAME in geoip geosite
+          do
+            if [ -s "./resources/${NAME}.dat" ]; then
+              echo -e "${NAME}.dat restored from cache."
+              continue
+            fi
+            echo -e "${NAME}.dat is not in the cache, downloading..."
+            HASH="$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${NAME}.dat.sha256sum" | awk -F ' ' '{print $1}')"
+            curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${NAME}.dat" -o "./resources/${NAME}.dat"
+            echo -e "Verifying HASH key..."
+            [ "$(sha256sum "./resources/${NAME}.dat" | awk -F ' ' '{print $1}')" == "${HASH}" ] || { echo -e "The HASH key of ${NAME}.dat does not match cloud one."; exit 1; }
+          done
+
+      - name: Download Wintun if not restored from cache
+        if: matrix.goos == 'windows'
+        env:
+          ASSETVER: 0.14.1
+          ASSETHASH: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+        run: |
+          [ -d 'resources' ] || mkdir resources
+          case ${GOARCH} in
+            amd64) WINTUN_ARCH=amd64 ;;
+            386)   WINTUN_ARCH=x86 ;;
+            arm64) WINTUN_ARCH=arm64 ;;
+          esac
+          if [ -s "./resources/wintun/bin/${WINTUN_ARCH}/wintun.dll" ] && [ -s './resources/wintun/LICENSE.txt' ]; then
+            echo -e "Wintun for ${GOARCH} restored from cache."
+            exit 0
+          fi
+          echo -e "Wintun is not in the cache, downloading..."
+          curl -sL "https://www.wintun.net/builds/wintun-${ASSETVER}.zip" -o wintun.zip
+          echo -e "Verifying HASH key..."
+          [ "$(sha256sum wintun.zip | awk -F ' ' '{print $1}')" == "${ASSETHASH}" ] || { echo -e "Digest of wintun.zip mismatch."; exit 1; }
+          unzip -u wintun.zip -d resources/
+          rm -f wintun.zip
+
       - name: Add additional assets into package
         run: |
           mv -f resources/geo* build_assets/

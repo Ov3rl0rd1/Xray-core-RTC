@@ -1,0 +1,12 @@
+# Keep the build context small and reproducible.
+.git
+.github
+.vscode
+.idea
+*.md
+**/*_test.go
+build_assets
+dist
+*.log
+Dockerfile
+.dockerignore

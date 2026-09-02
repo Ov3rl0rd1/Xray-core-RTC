@@ -1,0 +1,42 @@
+# Files this fork OWNS. Everything listed here is copied verbatim onto a clean
+# upstream tree; nothing in it exists upstream, so none of it can ever conflict.
+#
+# Anything NOT listed here is upstream's, and the few lines we need inside those
+# files live in fork/patches/ instead. Keeping that split is the whole point:
+# 80 files of ours + ~30 lines of theirs.
+#
+# One path per line. A trailing /** takes the directory recursively.
+# '#' starts a comment.
+
+# ── olcRTC: the protocol itself, plus its vendored library ──────────────────
+proxy/olcrtc/**
+
+# ── Seams that let the above plug into upstream without editing it ──────────
+proxy/selfdriven.go
+app/proxyman/inbound/selfdriven.go
+infra/conf/olcrtc.go
+infra/conf/fork_registry.go
+main/distro/all/fork.go
+
+# ── Per-user aggregate speed limiting (hooked from app/dispatcher) ──────────
+app/dispatcher/ratelimit.go
+
+# ── Pause/resume for background housekeeping, for the embedded client ───────
+common/pause/pause.go
+transport/internet/hysteria/fork_pause.go
+
+# ── libxray: the C ABI the mobile client links against ─────────────────────
+libxray/**
+main/distro/lib/lib.go
+
+# ── Packaging and fork-local CI ────────────────────────────────────────────
+Dockerfile
+.dockerignore
+.gitattributes
+client.json
+.github/workflows/build-lib.yml
+.github/workflows/fork-guard.yml
+.github/workflows/upstream-watch.yml
+
+# ── This machinery itself ──────────────────────────────────────────────────
+fork/**

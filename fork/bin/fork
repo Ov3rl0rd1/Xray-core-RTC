@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  fork — keep this fork on top of upstream Xray-core with as little friction
+#         as possible.
+#
+#  The model: this fork is 80 files of its own plus about 30 lines inside
+#  upstream's. The 80 files are an OVERLAY (fork/manifest.txt) and can never
+#  conflict; the 30 lines are PATCHES (fork/patches/) and are the only thing a
+#  new upstream release can ever argue with.
+#
+#  go.mod / go.sum are deliberately NOT patched. They are the largest and most
+#  conflict-prone files in a Go fork, and they do not need to be: the exact
+#  versions we depend on are listed in fork/deps.txt and re-pinned with `go get`,
+#  then `go mod tidy` derives the rest. That removes ~380 lines of guaranteed
+#  conflict from every single update.
+#
+#  Commands:
+#    fork status                 what we are based on, and what upstream has
+#    fork build <ref> <dir>      construct a full tree: upstream <ref> + fork
+#    fork check [<ref>]          does the fork still apply? (CI gate)
+#    fork export [--check]       regenerate fork/patches/ from the working tree
+#    fork deps [<dir>]           re-pin fork/deps.txt, then go mod tidy
+#    fork adopt <ref>            land a new upstream ref on a branch
+#
+#  Typical update:
+#    fork status                 # see that upstream tagged something new
+#    fork check v26.8.1          # does it still apply, build and test?
+#    fork adopt v26.8.1          # if yes, move the checkout over
+# =============================================================================
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FORK_DIR="$ROOT/fork"
+MANIFEST="$FORK_DIR/manifest.txt"
+PATCH_DIR="$FORK_DIR/patches"
+UPSTREAM_FILE="$FORK_DIR/upstream.txt"
+DEPS_FILE="$FORK_DIR/deps.txt"
+
+UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
+UPSTREAM_URL="https://github.com/XTLS/Xray-core.git"
+
+# ── output ───────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+    B=$'\033[1m'; R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
+else
+    B=""; R=""; G=""; Y=""; N=""
+fi
+say()  { printf '%s\n' "$*"; }
+info() { printf '%s==>%s %s\n' "$B" "$N" "$*"; }
+ok()   { printf '%s  ok%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '%s  !!%s %s\n' "$Y" "$N" "$*" >&2; }
+die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+base_ref() { tr -d ' \t\r\n' < "$UPSTREAM_FILE"; }
+
+# Paths the fork owns, one per line, with any trailing /** stripped.
+manifest_paths() {
+    sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$MANIFEST" \
+        | grep -v '^$' \
+        | sed -e 's#/\*\*$##'
+}
+
+ensure_upstream_remote() {
+    git -C "$ROOT" remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1 && return
+    info "adding remote '$UPSTREAM_REMOTE' -> $UPSTREAM_URL"
+    git -C "$ROOT" remote add "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
+}
+
+fetch_upstream() {
+    ensure_upstream_remote
+    git -C "$ROOT" fetch --quiet --tags "$UPSTREAM_REMOTE" || die "could not fetch $UPSTREAM_REMOTE"
+}
+
+# Newest upstream RELEASE tag (vYY.M.D). Release tags only — main moves daily
+# and is not what a VPN data plane should follow.
+latest_upstream_tag() {
+    git -C "$ROOT" tag -l --sort=-creatordate \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+        | head -1
+}
+
+require_clean_tree() {
+    git -C "$ROOT" diff --quiet && git -C "$ROOT" diff --cached --quiet \
+        || die "working tree has uncommitted changes — commit or stash first"
+}
+
+# ── build: upstream <ref> + overlay + patches -> a complete tree ─────────────
+cmd_build() {
+    local ref="${1:-}" out="${2:-}"
+    [ -n "$ref" ] && [ -n "$out" ] || die "usage: fork build <upstream-ref> <output-dir>"
+    [ -e "$out" ] && die "$out already exists"
+
+    git -C "$ROOT" rev-parse --verify --quiet "$ref^{commit}" >/dev/null \
+        || die "unknown ref '$ref' (try: fork status, or git fetch $UPSTREAM_REMOTE --tags)"
+
+    info "checking out upstream $ref"
+    git -C "$ROOT" worktree add --quiet --detach "$out" "$ref"
+    out="$(cd "$out" && pwd)"
+
+    info "copying the overlay ($(manifest_paths | wc -l) entries)"
+    local missing=0
+    while IFS= read -r path; do
+        if [ ! -e "$ROOT/$path" ]; then
+            warn "manifest lists '$path', which does not exist"
+            missing=$((missing + 1))
+            continue
+        fi
+        mkdir -p "$out/$(dirname "$path")"
+        cp -R "$ROOT/$path" "$out/$(dirname "$path")/"
+    done < <(manifest_paths)
+    [ "$missing" -eq 0 ] || warn "$missing manifest entr(y|ies) missing — run 'fork export' after fixing"
+
+    info "applying patches"
+    local failed=""
+    for patch in "$PATCH_DIR"/*.patch; do
+        [ -e "$patch" ] || continue
+        local name; name="$(basename "$patch")"
+        # --3way is the point: it falls back to a real merge using the blobs the
+        # patch records, so an upstream edit *near* ours still applies cleanly
+        # where a plain `patch` would refuse.
+        if git -C "$out" apply --3way --whitespace=nowarn "$patch" 2>/dev/null; then
+            ok "$name"
+        else
+            warn "$name did NOT apply cleanly"
+            failed="$failed $name"
+        fi
+    done
+
+    if [ -n "$failed" ]; then
+        # Leave the conflicts in the tree rather than unwinding them: they are
+        # what a human needs to look at.
+        warn "conflicts left in $out — resolve, then run 'fork export' there"
+        say ""
+        say "  conflicted patches:$failed"
+        say "  files:"
+        git -C "$out" diff --name-only --diff-filter=U | sed 's/^/    /'
+        return 3
+    fi
+
+    ok "fork applied onto $ref"
+    return 0
+}
+
+# ── deps: re-pin what we depend on, then let Go derive the rest ─────────────
+cmd_deps() {
+    local dir="${1:-$ROOT}"
+    command -v go >/dev/null 2>&1 || die "go is not installed"
+
+    info "pinning $(grep -cvE '^\s*(#|$)' "$DEPS_FILE") direct dependencies"
+    while read -r module version; do
+        case "$module" in ''|'#'*) continue;; esac
+        (cd "$dir" && go get "$module@$version" >/dev/null 2>&1) \
+            || warn "could not pin $module@$version"
+    done < "$DEPS_FILE"
+
+    info "go mod tidy"
+    (cd "$dir" && go mod tidy) || die "go mod tidy failed"
+    ok "go.mod / go.sum regenerated"
+}
+
+# ── check: would the fork survive this upstream ref? ────────────────────────
+cmd_check() {
+    local ref="${1:-$(base_ref)}"
+    local tmp; tmp="$(mktemp -d)"
+    local work="$tmp/tree"
+    local rc=0
+
+    info "checking the fork against $ref"
+    cmd_build "$ref" "$work" || rc=$?
+
+    if [ "$rc" -ne 0 ]; then
+        warn "patches do not apply to $ref"
+        git -C "$ROOT" worktree remove --force "$work" 2>/dev/null || true
+        rm -rf "$tmp"
+        return "$rc"
+    fi
+
+    if command -v go >/dev/null 2>&1; then
+        cmd_deps "$work"
+        info "building"
+        if (cd "$work" && go build ./...); then ok "builds"; else warn "build FAILED"; rc=1; fi
+        info "vetting the fork's own packages"
+        # Only ours: upstream vet findings are upstream's problem, and failing on
+        # them would make this gate useless the first time they land one.
+        if (cd "$work" && go vet ./proxy/olcrtc ./app/dispatcher ./common/pause ./transport/internet/hysteria 2>&1 | grep -v '^#' | grep -q .); then
+            warn "go vet reported findings"
+        else
+            ok "vet clean"
+        fi
+    else
+        warn "go not installed — skipped build/vet"
+    fi
+
+    git -C "$ROOT" worktree remove --force "$work" 2>/dev/null || true
+    rm -rf "$tmp"
+    return "$rc"
+}
+
+# ── export: regenerate patches from the working tree ────────────────────────
+#
+# Patches are DERIVED from the tree, never hand-edited. You change code the
+# normal way and re-export; `fork export --check` in CI then guarantees the two
+# can never drift apart, which is the failure mode that makes patch-based forks
+# miserable.
+cmd_export() {
+    local check=0
+    [ "${1:-}" = "--check" ] && check=1
+
+    local base; base="$(base_ref)"
+    git -C "$ROOT" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
+        || die "base ref '$base' not found — run 'fork status' to fetch upstream tags"
+
+    # Every upstream file we modify, minus what is derived (go.mod/go.sum) and
+    # minus anything the overlay owns.
+    local changed
+    changed="$(git -C "$ROOT" diff --name-only --diff-filter=M "$base" \
+                | grep -vE '^(go\.mod|go\.sum)$' || true)"
+    while IFS= read -r owned; do
+        [ -n "$owned" ] || continue
+        changed="$(printf '%s\n' "$changed" | grep -vxF "$owned" || true)"
+    done < <(manifest_paths)
+
+    # Anything modified but not assigned to a group would silently be lost on
+    # the next update — the one mistake this layout can still make.
+    local grouped="" unassigned=""
+    while read -r name files; do
+        case "$name" in ''|'#'*) continue;; esac
+        grouped="$grouped $files"
+    done < "$FORK_DIR/patch-groups.txt"
+
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        case " $grouped " in *" $f "*) ;; *) unassigned="$unassigned $f" ;; esac
+    done <<< "$changed"
+
+    if [ -n "$unassigned" ]; then
+        warn "modified upstream files not assigned to any patch group:"
+        for f in $unassigned; do say "    $f"; done
+        die "add them to fork/patch-groups.txt (or to the overlay manifest)"
+    fi
+
+    local tmp; tmp="$(mktemp -d)"
+    local drift=0
+
+    while read -r name files; do
+        case "$name" in ''|'#'*) continue;; esac
+        git -C "$ROOT" diff "$base" -- $files > "$tmp/$name.patch"
+
+        if [ "$check" -eq 1 ]; then
+            if ! cmp -s "$tmp/$name.patch" "$PATCH_DIR/$name.patch"; then
+                warn "$name.patch is out of date"
+                drift=1
+            fi
+        else
+            mv "$tmp/$name.patch" "$PATCH_DIR/$name.patch"
+            ok "$name.patch"
+        fi
+    done < "$FORK_DIR/patch-groups.txt"
+
+    rm -rf "$tmp"
+
+    if [ "$check" -eq 1 ]; then
+        [ "$drift" -eq 0 ] || die "fork/patches/ does not match the tree — run 'fork export'"
+        ok "patches match the tree"
+    else
+        info "regenerated against $base"
+    fi
+}
+
+# ── adopt: move this repository onto a new upstream ref ─────────────────────
+#
+# Lands the result on a branch as a single merge commit whose tree is the
+# verified build and whose parents are (this fork, that upstream ref). So the
+# fork's history survives, git knows the upstream release is merged, and the
+# diff you review is exactly "what upstream changed".
+#
+# main is never touched — you merge the branch yourself once it looks right.
+cmd_adopt() {
+    local ref="${1:-}"
+    [ -n "$ref" ] || die "usage: fork adopt <upstream-ref>"
+    require_clean_tree
+    command -v go >/dev/null 2>&1 || die "go is required (go.mod/go.sum are regenerated, not patched)"
+
+    git -C "$ROOT" rev-parse --verify --quiet "$ref^{commit}" >/dev/null \
+        || die "unknown ref '$ref' — run 'fork status' first"
+
+    local tmp work branch
+    tmp="$(mktemp -d)"
+    work="$tmp/tree"
+    branch="update/${ref}"
+
+    cmd_build "$ref" "$work" \
+        || die "patches conflict with $ref — resolve in $work, run 'fork export' there, then retry"
+
+    # The pin has to move before the tree is captured, or the new commit still
+    # claims to be based on the old release.
+    printf '%s\n' "$ref" > "$work/fork/upstream.txt"
+
+    cmd_deps "$work"
+
+    info "verifying the result builds"
+    (cd "$work" && go build ./...) || die "the adopted tree does not build — nothing was changed"
+
+    info "committing to $branch"
+    local tree commit
+    tree="$(cd "$work" && git add -A >/dev/null && git write-tree)"
+    commit="$(git -C "$ROOT" commit-tree "$tree" -p HEAD -p "$ref" \
+        -m "Rebase fork onto upstream $ref
+
+Tree rebuilt by fork/bin/fork: upstream $ref + the overlay in
+fork/manifest.txt + the patches in fork/patches/.")"
+
+    git -C "$ROOT" worktree remove --force "$work" 2>/dev/null || true
+    rm -rf "$tmp"
+
+    git -C "$ROOT" branch -f "$branch" "$commit"
+
+    ok "created $branch"
+    say ""
+    say "  review:  git diff HEAD..$branch"
+    say "  land it: git checkout main && git merge --ff-only $branch"
+}
+
+# ── status ──────────────────────────────────────────────────────────────────
+cmd_status() {
+    fetch_upstream
+    local base latest
+    base="$(base_ref)"
+    latest="$(latest_upstream_tag)"
+
+    say "${B}based on:${N}  $base"
+    say "${B}latest:${N}    ${latest:-unknown}"
+
+    if [ "$base" = "$latest" ]; then
+        ok "up to date with the newest upstream release"
+    else
+        warn "upstream has released $latest"
+        say ""
+        say "  changes since $base:"
+        git -C "$ROOT" log --oneline "$base..$latest" 2>/dev/null | head -20 | sed 's/^/    /'
+    fi
+
+    local ahead
+    ahead="$(git -C "$ROOT" rev-list --count "$base..$UPSTREAM_REMOTE/main" 2>/dev/null || echo '?')"
+    say ""
+    say "  unreleased upstream commits on main: $ahead"
+    say ""
+    say "${B}fork footprint:${N}"
+    say "  overlay:  $(manifest_paths | wc -l) manifest entries"
+    say "  patches:  $(ls -1 "$PATCH_DIR"/*.patch 2>/dev/null | wc -l) files, $(cat "$PATCH_DIR"/*.patch 2>/dev/null | grep -cE '^[+-]' || echo 0) changed lines"
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────
+case "${1:-}" in
+    build)  shift; cmd_build "$@" ;;
+    check)  shift; cmd_check "$@" ;;
+    export) shift; cmd_export "$@" ;;
+    adopt)  shift; cmd_adopt "$@" ;;
+    deps)   shift; cmd_deps "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    ''|-h|--help|help) sed -n '2,29p' "${BASH_SOURCE[0]}" | sed -e 's/^#//' -e 's/^ //' ;;
+    *) die "unknown command '$1' (try: fork help)" ;;
+esac

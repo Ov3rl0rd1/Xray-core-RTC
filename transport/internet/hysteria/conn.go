@@ -11,7 +11,6 @@ import (
 	"github.com/apernet/quic-go/quicvarint"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/pause"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/transport/internet"
 )
@@ -172,38 +171,12 @@ func (m *udpSessionManager) close(udpConn *InterConn) {
 	}
 }
 
-// clean expires UDP sessions that have been idle past udpIdleTimeout.
-//
-// Runs at 1 Hz, which is right while traffic is flowing and pure cost while the
-// device is asleep — nothing creates sessions in Doze, so there is never
-// anything to expire. The ticker is therefore stopped outright while the host
-// has housekeeping paused, rather than left armed to fire into a loop that will
-// find an unchanged map. Sessions that do go idle across a pause are expired by
-// the first tick after the resume.
 func (m *udpSessionManager) clean() {
 	ticker := time.NewTicker(idleCleanupInterval)
 	defer ticker.Stop()
 
-	ticking := true
-
 	for {
-		// Before the test, not after — see pause.Resumed.
-		resumed := pause.Resumed()
-		if pause.IsPaused() {
-			if ticking {
-				ticker.Stop()
-				ticking = false
-			}
-			<-resumed
-			continue
-		}
-		if !ticking {
-			ticker.Reset(idleCleanupInterval)
-			ticking = true
-		}
-
-		<-ticker.C
-
+		forkTick(ticker, idleCleanupInterval) // fork: pause-aware wait, see fork_pause.go
 		if m.closed {
 			return
 		}

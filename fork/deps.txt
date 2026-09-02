@@ -1,0 +1,15 @@
+codeberg.org/rape4me/kc v0.0.0-20260527075816-a7996790b05b
+github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+github.com/livekit/protocol v1.49.0
+github.com/livekit/server-sdk-go/v2 v2.17.0
+github.com/pion/interceptor v0.1.45
+github.com/pion/logging v0.2.4
+github.com/pion/rtp v1.10.3
+github.com/pion/transport/v4 v4.0.2
+github.com/pion/webrtc/v4 v4.2.16
+github.com/xtaci/kcp-go/v5 v5.6.72
+github.com/xtaci/smux v1.5.57
+github.com/zarazaex69/gr v0.1.5
+golang.org/x/exp v0.0.0-20260603202125-055de637280b
+golang.org/x/time v0.15.0
+gopkg.in/yaml.v3 v3.0.1

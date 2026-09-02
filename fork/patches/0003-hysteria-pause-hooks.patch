@@ -1,0 +1,43 @@
+diff --git a/transport/internet/hysteria/conn.go b/transport/internet/hysteria/conn.go
+index ce2a4af3..6de72af7 100644
+--- a/transport/internet/hysteria/conn.go
++++ b/transport/internet/hysteria/conn.go
+@@ -175,7 +175,8 @@ func (m *udpSessionManager) clean() {
+ 	ticker := time.NewTicker(idleCleanupInterval)
+ 	defer ticker.Stop()
+ 
+-	for range ticker.C {
++	for {
++		forkTick(ticker, idleCleanupInterval) // fork: pause-aware wait, see fork_pause.go
+ 		if m.closed {
+ 			return
+ 		}
+diff --git a/transport/internet/hysteria/dialer.go b/transport/internet/hysteria/dialer.go
+index ed7dd4b2..6b98b374 100644
+--- a/transport/internet/hysteria/dialer.go
++++ b/transport/internet/hysteria/dialer.go
+@@ -303,14 +303,7 @@ type clientManager struct {
+ }
+ 
+ func (m *clientManager) clean() {
+-	ticker := time.NewTicker(idleCleanupInterval)
+-	for range ticker.C {
+-		m.RLock()
+-		for _, c := range m.m {
+-			c.clean()
+-		}
+-		m.RUnlock()
+-	}
++	forkCleanClients(m) // fork: pause- and idle-aware reaper, see fork_pause.go
+ }
+ 
+ var (
+@@ -353,6 +346,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+ 			manager.m[dialerConf{dest, streamSettings}] = c
+ 		}
+ 		manager.Unlock()
++
++		forkNotify() // fork: the reaper may be parked on an empty pool
+ 	}
+ 
+ 	if datagram {

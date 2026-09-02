@@ -1,0 +1,54 @@
+name: Fork guard
+
+# The one failure mode a patch-based fork can still walk into: someone edits an
+# upstream file directly, the patches are not regenerated, and the change is
+# silently dropped the next time the fork is rebuilt on a new upstream. It shows
+# up weeks later as a feature that "stopped working after the update".
+#
+# So on every push: patches must match the tree, and every modified upstream
+# file must belong to a patch group. Both are cheap and neither needs network.
+#
+# This is a fork-owned workflow (fork/manifest.txt), not a patch on an upstream
+# one — nothing here can conflict with what XTLS does to their CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # fork export diffs against the upstream base tag
+
+      - name: Fetch the upstream base tag
+        run: |
+          git remote add upstream https://github.com/XTLS/Xray-core.git 2>/dev/null || true
+          BASE="$(tr -d ' \t\r\n' < fork/upstream.txt)"
+          echo "Base: $BASE"
+          # A single tag, not the whole history: this only needs the blobs the
+          # patches diff against.
+          git fetch --quiet --depth=1 upstream "refs/tags/$BASE:refs/tags/$BASE" || \
+            git fetch --quiet --tags upstream
+
+      - name: Patches match the tree
+        run: ./fork/bin/fork export --check
+
+      - name: Fork footprint
+        # Printed on every run so a creeping increase is visible in the log
+        # rather than only when an update goes badly.
+        run: |
+          ./fork/bin/fork status || true
+          {
+            echo "### Fork footprint"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| overlay files (never conflict) | $(git ls-files $(sed -e 's/#.*//' -e 's#/\*\*$##' fork/manifest.txt | grep -v '^$') 2>/dev/null | wc -l) |"
+            echo "| patched upstream files | $(grep -c '^diff --git' fork/patches/*.patch | awk -F: '{s+=$2} END {print s}') |"
+            echo "| patched lines | $(cat fork/patches/*.patch | grep -cE '^[+-]' ) |"
+          } >> "$GITHUB_STEP_SUMMARY"

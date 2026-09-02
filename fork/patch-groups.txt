@@ -1,0 +1,17 @@
+# Which upstream files go into which patch. `fork export` regenerates
+# fork/patches/ from this, so the patches can never drift away from the tree.
+#
+# Format:  <patch-name>  <upstream file> [<upstream file> ...]
+#
+# ONLY files that exist upstream and that we modify belong here. Files we add
+# outright are overlay (fork/manifest.txt) and must never appear in a patch —
+# they would be applied twice.
+#
+# go.mod / go.sum are absent on purpose: they are regenerated from
+# fork/deps.txt + `go mod tidy`, which removes ~380 lines of certain conflict.
+
+0001-self-driven-inbound-seam   app/proxyman/inbound/inbound.go infra/conf/xray.go
+0002-per-user-rate-limit-hook   app/dispatcher/default.go
+0003-hysteria-pause-hooks       transport/internet/hysteria/conn.go transport/internet/hysteria/dialer.go
+0004-ci-asset-fallbacks         .github/workflows/release.yml .github/workflows/release-win7.yml .github/workflows/test.yml
+0005-gitignore                  .gitignore

@@ -83,7 +83,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          ./fork/bin/fork build "${{ steps.decide.outputs.ref }}" /tmp/trial 2>&1 | tee /tmp/apply.log
+          bash ./fork/bin/fork build "${{ steps.decide.outputs.ref }}" /tmp/trial 2>&1 | tee /tmp/apply.log
 
       - name: Build and test
         if: steps.decide.outputs.up_to_date == 'false' && steps.apply.outcome == 'success'
@@ -94,7 +94,7 @@ jobs:
           set -o pipefail
           {
             echo "== go get (pinned deps) + go mod tidy =="
-            "$GITHUB_WORKSPACE/fork/bin/fork" deps . 2>&1
+            bash "$GITHUB_WORKSPACE/fork/bin/fork" deps . 2>&1
             echo ""
             echo "== go build ./... =="
             go build ./... 2>&1

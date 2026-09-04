@@ -36,13 +36,13 @@ jobs:
             git fetch --quiet --tags upstream
 
       - name: Patches match the tree
-        run: ./fork/bin/fork export --check
+        run: bash ./fork/bin/fork export --check
 
       - name: Fork footprint
         # Printed on every run so a creeping increase is visible in the log
         # rather than only when an update goes badly.
         run: |
-          ./fork/bin/fork status || true
+          bash ./fork/bin/fork status || true
           {
             echo "### Fork footprint"
             echo ""

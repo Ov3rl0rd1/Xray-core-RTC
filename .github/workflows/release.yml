@@ -1,12 +1,12 @@
 name: Build and Release
 
 on:
+  # Manual only, plus a release you deliberately publish. Upstream builds every
+  # target on every push and every PR; on this fork that is ~20 cross-compiles
+  # per commit whose artifacts nobody collects. Nothing else here is changed.
   workflow_dispatch:
   release:
     types: [published]
-  push:
-  pull_request:
-    types: [opened, synchronize, reopened]
 
 jobs:
   check-assets:

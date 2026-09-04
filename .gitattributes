@@ -10,3 +10,10 @@ go.sum merge=union
 # file looks unformatted locally while CI, which checks out LF, sees the real
 # handful -- and `go run ./infra/vformat/main.go` would rewrite the whole tree.
 *.go text eol=lf
+
+# The fork tooling is bash, and it parses fork/*.txt line by line. A CRLF
+# checkout (core.autocrlf on Windows) puts a trailing \r inside every path it
+# reads, so `fork export` decides that the last file of every patch group is
+# unassigned and refuses to run. The patches have to stay LF for the same
+# reason: `git apply` against an LF tree would see a whole-file rewrite.
+fork/** text eol=lf

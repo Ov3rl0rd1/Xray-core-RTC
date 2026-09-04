@@ -11,6 +11,11 @@ on:
 jobs:
   check-assets:
     runs-on: ubuntu-latest
+    # Dispatching scheduled-assets-update.yml needs actions:write. A fork
+    # whose default GITHUB_TOKEN is read-only gets a 403 without this.
+    permissions:
+      contents: read
+      actions: write
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     steps:
       - name: Restore Geodat Cache
@@ -57,6 +62,10 @@ jobs:
       - name: Trigger Asset Update Workflow if Assets Missing
         if: steps.check-assets.outputs.missing == 'true'
         uses: actions/github-script@v9
+        # And if it still cannot dispatch (org policy, a tag ref), the run
+        # should not die here: the build job downloads whatever the cache
+        # misses anyway.
+        continue-on-error: true
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

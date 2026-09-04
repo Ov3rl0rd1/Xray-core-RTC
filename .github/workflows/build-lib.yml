@@ -2,7 +2,16 @@ name: Build Xray library
 
 # Builds Xray-core as a C shared library (see libxray/) for embedding in a
 # client app over its C ABI, and publishes the result as a release in this
-# fork. Targets Android (all four ABIs) and Windows (x64, x86).
+# fork.
+#
+# Targets: Android arm64-v8a and x86_64, Windows x64.
+#
+# Deliberately not built: Android armeabi-v7a and x86, and Windows x86. A
+# 32-bit Android phone is a rarity the consuming client does not ship for, and
+# the client is a 64-bit Windows binary that cannot load a 32-bit DLL anyway.
+# The cost of building them is not the CI minutes -- it is ~55 MB per ABI in
+# every release archive, and four more artefacts to check when something looks
+# wrong. Add a leg back to the matrix if a target ever needs one.
 #
 # Everything cross-compiles from ubuntu-latest: the Android NDK and mingw-w64
 # both run on Linux, so there is no need for a windows runner, and the two jobs
@@ -42,16 +51,9 @@ jobs:
           - abi: arm64-v8a
             goarch: arm64
             cc: aarch64-linux-android24-clang
-          - abi: armeabi-v7a
-            goarch: arm
-            goarm: "7"
-            cc: armv7a-linux-androideabi24-clang
           - abi: x86_64
             goarch: amd64
             cc: x86_64-linux-android24-clang
-          - abi: x86
-            goarch: 386
-            cc: i686-linux-android24-clang
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
@@ -112,10 +114,6 @@ jobs:
             cc: x86_64-w64-mingw32-gcc
             # High-entropy ASLR is 64-bit only.
             pe_ldflags: -Wl,--nxcompat,--dynamicbase,--high-entropy-va
-          - arch: x86
-            goarch: 386
-            cc: i686-w64-mingw32-gcc
-            pe_ldflags: -Wl,--nxcompat,--dynamicbase
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
@@ -185,11 +183,8 @@ jobs:
           # A missing target here means one matrix leg silently produced nothing.
           for EXPECTED in \
             bundle/android/arm64-v8a/libxray.so \
-            bundle/android/armeabi-v7a/libxray.so \
             bundle/android/x86_64/libxray.so \
-            bundle/android/x86/libxray.so \
-            bundle/windows/x64/xray.dll \
-            bundle/windows/x86/xray.dll
+            bundle/windows/x64/xray.dll
           do
             [ -s "${EXPECTED}" ] || { echo "Missing ${EXPECTED}"; exit 1; }
           done
@@ -236,5 +231,5 @@ jobs:
           else
             gh release create "${TAG}" libxray.zip libxray.zip.dgst \
               --title "libxray ${TAG}" \
-              --notes "Xray-core shared library for Android (arm64-v8a, armeabi-v7a, x86_64, x86) and Windows (x64, x86). See README.md in the archive for the C API."
+              --notes "Xray-core shared library for Android (arm64-v8a, x86_64) and Windows (x64). See README.md in the archive for the C API."
           fi

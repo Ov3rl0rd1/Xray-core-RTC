@@ -1,0 +1,18 @@
+--- a/pkg/olcrtc/client/defaults_test.go
++++ b/pkg/olcrtc/client/defaults_test.go
+@@ -51,9 +51,12 @@
+ 	}
+ 	wg.Wait()
+ 
+-	requireRegistryNames(t, "auth providers", auth.Available(), []string{"jitsi", "telemost", "wbstream"})
+-	requireRegistryNames(t, "provider factories", enginebuiltin.Available(), []string{"jitsi", "none", "telemost", "wbstream"})
+-	requireRegistryNames(t, "engines", engine.Available(), []string{"goolom", "jitsi", "livekit"})
++	// jitsi is not vendored in this fork; see fork/olcrtc-manifest.txt. Keeping
++	// the assertion exact rather than loose means it still catches a provider
++	// appearing or vanishing by accident.
++	requireRegistryNames(t, "auth providers", auth.Available(), []string{"telemost", "wbstream"})
++	requireRegistryNames(t, "provider factories", enginebuiltin.Available(), []string{"none", "telemost", "wbstream"})
++	requireRegistryNames(t, "engines", engine.Available(), []string{"goolom", "livekit"})
+ 	if constructor == "engineconn" {
+ 		requireRegistryNames(t, "transports", transport.Available(), nil)
+ 		return

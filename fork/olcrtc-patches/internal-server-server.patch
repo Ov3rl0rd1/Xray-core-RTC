@@ -1,0 +1,37 @@
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -69,6 +69,7 @@
+ 	onOpen        SessionOpenFunc
+ 	onClose       SessionCloseFunc
+ 	onTraffic     TrafficFunc
++	dialHook      DialFunc
+ 	deviceID      string
+ 	sessionID     string
+ 
+@@ -106,10 +107,14 @@
+ 	Liveness         control.Config
+ 	Traffic          transport.TrafficConfig
+ 	AuthHook         handshake.AuthFunc
+-	OnSessionOpen    SessionOpenFunc
+-	OnSessionClose   SessionCloseFunc
+-	OnTraffic        TrafficFunc
+-	OnHealth         HealthFunc
++	// DialHook, when set, replaces the built-in egress dialer so a host
++	// application can route the tunnel's exits through its own stack. See
++	// fork_egress.go.
++	DialHook       DialFunc
++	OnSessionOpen  SessionOpenFunc
++	OnSessionClose SessionCloseFunc
++	OnTraffic      TrafficFunc
++	OnHealth       HealthFunc
+ }
+ 
+ // Run starts the server with the given configuration.
+@@ -138,6 +143,7 @@
+ 	}
+ 	s := &Server{
+ 		keys: keys, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
++		dialHook:  cfg.DialHook,
+ 		dnsServer: cfg.DNSServer, resolver: tunnelcore.Resolver(cfg.Resolver, cfg.DNSServer),
+ 		socksProxyAddr: cfg.SOCKSProxyAddr, socksProxyPort: cfg.SOCKSProxyPort,
+ 		socksProxyUser: cfg.SOCKSProxyUser, socksProxyPass: cfg.SOCKSProxyPass,

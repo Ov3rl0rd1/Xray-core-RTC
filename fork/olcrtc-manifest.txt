@@ -1,0 +1,52 @@
+# What of olcRTC is vendored into proxy/olcrtc/olcrtclib, and what is not.
+#
+# `fork/bin/olcrtc vendor` copies every '+' path from an upstream checkout,
+# rewrites its import paths onto this module, drops every '-' path, and leaves
+# every '=' path alone. Then it applies fork/olcrtc-patches/.
+#
+# The point is the same as fork/manifest.txt's: keep the edits we make inside
+# upstream's files down to a handful of lines, and keep everything else in
+# files upstream does not have. The last resync found 41 of 43 vendored files
+# changed and 8 gone, because nothing was watching. This is what watches.
+#
+#   +  vendor this path from upstream, recursively
+#   -  skip this path (it sits under a vendored one)
+#   =  this file is ours; never delete it, never overwrite it
+
+# ── The library ─────────────────────────────────────────────────────────────
++ internal
++ pkg/olcrtc
+
+# ── Not vendored ────────────────────────────────────────────────────────────
+#
+# jitsi: this deployment uses telemost and wbstream only, and jitsi is the sole
+# reason the module would need github.com/zarazaex69/j. Dropping it costs two
+# lines in engine/builtin, which is what 0001-drop-jitsi does.
+- internal/auth/jitsi
+- internal/engine/jitsi
+
+# e2e drives real conferences against live services. It is upstream's release
+# gate, not something a build of Xray should carry or run.
+- internal/e2e
+
+# This one walks docs/examples, which is not vendored — only internal and pkg
+# are. Nothing to assert against, so it cannot run here.
+- internal/config/docs_examples_test.go
+
+# ── Ours, inside upstream's tree ────────────────────────────────────────────
+#
+# Xray needs two things upstream's embedding API does not offer, and both are
+# additions rather than edits — a new file in upstream's package, which is why
+# they are here and not in olcrtc-patches.
+#
+# fork_tunnel.go: dial arbitrary targets over the carrier. Upstream's client is
+# a SOCKS5 listener; an Xray outbound has already parsed the target and needs
+# to hand it over directly.
+= internal/client/fork_tunnel.go
+= pkg/olcrtc/client/fork_dial.go
+= pkg/olcrtc/tunnel/fork_dial.go
+
+# fork_egress.go: hand a tunnelled target to Xray's router instead of exiting
+# to the internet from here. This one does need three lines inside upstream's
+# server, which is what olcrtc-patches holds.
+= internal/server/fork_egress.go

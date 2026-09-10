@@ -8,8 +8,8 @@ import (
 )
 
 // buildTransportOptions packs per-transport tuning fields from cfg into the
-// typed Options value the chosen transport expects. An unrecognised transport
-// returns nil, leaving the transport to apply its own defaults.
+// typed Options value the chosen transport expects. Transports without
+// tunable options (datachannel) return nil.
 func buildTransportOptions(cfg Config) transport.Options {
 	switch cfg.Transport {
 	case transportVideo:
@@ -17,8 +17,6 @@ func buildTransportOptions(cfg Config) transport.Options {
 			Width:      cfg.Video.Width,
 			Height:     cfg.Video.Height,
 			FPS:        cfg.Video.FPS,
-			Bitrate:    cfg.Video.Bitrate,
-			HW:         cfg.Video.HW,
 			QRSize:     cfg.Video.QRSize,
 			QRRecovery: cfg.Video.QRRecovery,
 			Codec:      cfg.Video.Codec,

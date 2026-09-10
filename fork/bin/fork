@@ -195,7 +195,13 @@ cmd_check() {
             ok "vet clean"
         fi
         info "testing the fork's own packages"
-        if (cd "$work" && go test -count=1 $FORK_PKGS); then ok "tests pass"; else warn "tests FAILED"; rc=1; fi
+        # -p 2 rather than the default: the vendored olcrtc tree carries
+        # upstream's own tests, and a few of them assert that a goroutine
+        # reacts within milliseconds. Run thirty packages at once on a busy
+        # builder and those miss their deadline for reasons that have nothing
+        # to do with the code. Bounding the parallelism is the fork's business;
+        # rewriting upstream's tests would be conflict surface for no gain.
+        if (cd "$work" && go test -count=1 -p 2 $FORK_PKGS); then ok "tests pass"; else warn "tests FAILED"; rc=1; fi
     else
         warn "go not installed — skipped build/vet"
     fi

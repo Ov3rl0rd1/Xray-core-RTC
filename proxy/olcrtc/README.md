@@ -410,8 +410,10 @@ out := &core.OutboundHandlerConfig{
 For a server, use `&olcrtc.ServerConfig{...}` in an `InboundHandlerConfig`
 (no `ReceiverConfig` port needed) plus a `freedom` outbound for egress. The
 lower‑level olcrtc library is vendored under [`olcrtclib/`](olcrtclib) and
-exposed through [`olcrtclib/bridge`](olcrtclib/bridge) (`bridge.StartClient` /
-`bridge.RunServer`) if you want to drive the tunnel directly.
+exposed through olcRTC's own embedding API under
+[`olcrtclib/pkg/olcrtc`](olcrtclib/pkg/olcrtc) — `tunnel.NewWithDial` for a
+server whose egress you supply, `client.StartTunnel` for a carrier you dial
+over yourself — if you want to drive the tunnel directly.
 
 ---
 
@@ -445,13 +447,40 @@ exposed through [`olcrtclib/bridge`](olcrtclib/bridge) (`bridge.StartClient` /
 
 ---
 
+## Keeping the library in step
+
+`olcrtclib` is a copy of [olcRTC](https://github.com/openlibrecommunity/olcrtc)
+with its import paths rewritten onto this module, and
+[`fork/bin/olcrtc`](../../fork/bin/olcrtc) is what keeps it honest:
+
+```bash
+./fork/bin/olcrtc diff   ~/src/olcrtc   # what has moved upstream
+./fork/bin/olcrtc vendor ~/src/olcrtc   # bring it over, patches and all
+./fork/bin/olcrtc export ~/src/olcrtc   # regenerate patches after editing
+```
+
+The split is the same one `fork/bin/fork` uses for Xray itself: what the fork
+adds lives in **its own files** (listed in `fork/olcrtc-manifest.txt`), and the
+handful of lines it needs **inside** upstream's are patches. There are currently
+five, about a hundred lines, and three of them only exist because jitsi is not
+vendored.
+
+Nothing watched this before, and by the time anyone looked 41 of 43 vendored
+files had changed upstream and 8 were gone — including a rewrite of the crypto
+and a refactor that moved most of the client and server into a new package. Run
+`olcrtc diff` before assuming the copy is current.
+
+---
+
 ## How it's wired (for maintainers)
 
 - `olcrtclib/` — vendored olcrtc library (import paths rewritten to this module).
   `internal/client` exposes `StartTunnel`/`Tunnel.DialContext`; `internal/server`
   exposes a `DialHook` (egress delegated to Xray's dispatcher) and an `AuthHook`
   that receives the client `deviceId`; the `DialFunc` carries the authenticated
-  `sessionID`. `bridge/` is the only exported surface `proxy/olcrtc` depends on.
+  `sessionID`. `olcrtclib/pkg/olcrtc` is the only surface `proxy/olcrtc`
+  depends on; everything under `olcrtclib/internal` is out of reach by Go's own
+  rules, which is what keeps the seam honest.
 - User system: [`validator.go`](validator.go) (sync.Map store) + `Server`
   implements `proxy.UserManager` and stub `proxy.Inbound`; the authenticated
   identity is encoded into the sessionID and decoded in `dispatch` to set

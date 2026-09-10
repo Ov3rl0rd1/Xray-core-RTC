@@ -2,20 +2,25 @@ package wbstream
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/auth"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/protect"
 )
 
 // Provider produces LiveKit credentials for the WB Stream service.
-type Provider struct{}
+//
+// apiBase overrides the REST endpoint the provider talks to. The zero value
+// means defaultAPIURL; only tests set it.
+type Provider struct {
+	apiBase string
+}
 
 // Engine reports which engine consumes credentials from this auth provider.
 func (Provider) Engine() string { return "livekit" }
 
 // DefaultServiceURL returns the WB Stream service URL.
-func (Provider) DefaultServiceURL() string { return "https://stream.wb.ru" }
+func (Provider) DefaultServiceURL() string { return defaultAPIURL }
 
 // Issue runs the WB Stream auth flow and returns LiveKit credentials.
 //
@@ -23,29 +28,39 @@ func (Provider) DefaultServiceURL() string { return "https://stream.wb.ru" }
 // skipping the anonymous guest-register step so the session joins as that
 // account (with whatever publish rights the account holds). When cfg.Token is
 // empty the provider registers a guest as before.
-func (Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, error) {
+func (p Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, error) {
 	if cfg.RoomURL == "" || cfg.RoomURL == "any" {
 		return auth.Credentials{}, auth.ErrRoomIDRequired
 	}
+	resolver := cfg.Resolver
+	if resolver == nil {
+		resolver = protect.NewResolver(cfg.DNSServer)
+	}
+	// One client for the whole flow: the three calls hit the same host, so
+	// a client per request would throw away the connection every time.
+	client := protect.NewHTTPClient(resolver)
 
 	accessToken := cfg.Token
 	if accessToken == "" {
-		guest, err := registerGuest(ctx, cfg.Name)
+		guest, err := p.registerGuest(ctx, client, cfg.Name)
 		if err != nil {
-			return auth.Credentials{}, fmt.Errorf("register guest: %w", err)
+			return auth.Credentials{}, err
 		}
 		accessToken = guest
-		logger.Infof("wbstream: obtained guest access token, reuse it via auth.token to keep this identity: %s", accessToken)
+		// Never log the token itself: it is a bearer credential for the
+		// account and these logs routinely end up in bug reports.
+		logger.Infof("wbstream: obtained guest access token (%d bytes), "+
+			"reuse it via auth.token to keep this identity", len(accessToken))
 	}
 
 	roomID := cfg.RoomURL
-	if err := joinRoom(ctx, accessToken, roomID); err != nil {
-		return auth.Credentials{}, fmt.Errorf("join room: %w", err)
+	if err := p.joinRoom(ctx, client, accessToken, roomID); err != nil {
+		return auth.Credentials{}, err
 	}
 
-	tok, err := getToken(ctx, accessToken, roomID, cfg.Name)
+	tok, err := p.getToken(ctx, client, accessToken, roomID, cfg.Name)
 	if err != nil {
-		return auth.Credentials{}, fmt.Errorf("get token: %w", err)
+		return auth.Credentials{}, err
 	}
 
 	url := tok.ServerURL
@@ -58,8 +73,4 @@ func (Provider) Issue(ctx context.Context, cfg auth.Config) (auth.Credentials, e
 		Token: tok.RoomToken,
 		Extra: map[string]string{"roomID": roomID},
 	}, nil
-}
-
-func init() { //nolint:gochecknoinits // auth registration is the canonical Go pattern for plugins
-	auth.Register("wbstream", Provider{})
 }

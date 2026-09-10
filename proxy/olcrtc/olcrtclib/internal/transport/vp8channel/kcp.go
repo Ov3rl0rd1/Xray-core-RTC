@@ -1,8 +1,3 @@
-// Package vp8channel provides byte transport over VP8 video frames using KCP.
-/*
-ЯНДЕКС РАБ ИЛИ КТО ТЫ НАУЙ СУКА КАРОЧЕ ХУЙЛО КЕБАНОГЕ ИЗ ЯНДЕКС ЧИТАЮЩИЙ ЭТО
-МЫ ОСЕМЕНИМ ВТОЮ МАМАШКУ МЕРТВУЮ
-*/
 package vp8channel
 
 import (
@@ -20,7 +15,7 @@ import (
 // constant gives us a symmetrical P2P setup.
 const kcpConvID = 0xC0FFEE01
 
-// KCP tuning targets a lossy, bursty carrier (VP8 over an SFU). The defaults
+// KCP tuning targets a lossy, bursty provider (VP8 over an SFU). The defaults
 // are TCP-like and recover slowly after burst losses.
 const (
 	// kcp-go hardcodes mtuLimit=1500, so SetMtu() above this is silently
@@ -61,11 +56,12 @@ type kcpRuntime struct {
 	conn      *kcpConn
 	sess      *kcp.UDPSession
 	readDone  chan struct{}
-	writeMu   sync.Mutex // serializes length-prefix + payload writes
+	writeMu   sync.Mutex // serializes framed writes; also guards writeBuf
+	writeBuf  []byte     // ai-generated: framing scratch, reused under writeMu
 	closeOnce sync.Once
 }
 
-func startKCP(out chan<- []byte, onData func([]byte), epochHdr [epochHdrLen]byte) (*kcpRuntime, error) {
+func startKCP(out chan<- *packetBuffer, onData func([]byte), epochHdr [epochHdrLen]byte) (*kcpRuntime, error) {
 	c := newKCPConn(out, inboundQueueSize, epochHdr)
 
 	sess, err := kcp.NewConn3(kcpConvID, fakeUDPAddr(), nil, 0, 0, c)
@@ -78,7 +74,7 @@ func startKCP(out chan<- []byte, onData func([]byte), epochHdr [epochHdrLen]byte
 	// The frame ticker already paces emission at the VP8 frame cadence, so the
 	// 5ms KCP tick just keeps scheduling latency low; a slower tick only adds
 	// dead time before retransmits and ACKs. nc=1 disables KCP's loss-based
-	// congestion control because the carrier is a hard policer, not a fair
+	// congestion control because the provider is a hard policer, not a fair
 	// queue: with nc=0 the unavoidable ~4% drops collapsed cwnd and starved
 	// the wire. With nc=1 KCP keeps the window full and retransmits the few
 	// losses, letting throughput reach the SFU's real ceiling.
@@ -138,24 +134,32 @@ func (r *kcpRuntime) setHeader(hdr [epochHdrLen]byte) {
 	r.conn.setHeader(hdr)
 }
 
-// send queues an application message for reliable delivery. The length
-// prefix + payload pair is written under a mutex so that interleaved
-// concurrent senders cannot tear the framing.
+// send queues an application message for reliable delivery. Length prefix and
+// payload go out in one Write: two writes under a mutex stop concurrent senders
+// interleaving, but do not make the pair atomic against failure. If the header
+// lands and the payload does not, the stream carries a prefix for bytes that
+// were never sent and the reader cannot resynchronise.
+//
+// ai-generated: replaced the two Write calls with a single framed write into a
+// reused buffer; added writeBuf and the cap check.
 func (r *kcpRuntime) send(msg []byte) error {
 	if len(msg) > kcpMaxMessage {
 		return ErrKCPMessageTooLarge
 	}
-	var hdr [kcpLenPrefix]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(msg))) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
 
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 
-	if _, err := r.sess.Write(hdr[:]); err != nil {
-		return fmt.Errorf("kcp write header: %w", err)
+	need := kcpLenPrefix + len(msg)
+	if cap(r.writeBuf) < need {
+		r.writeBuf = make([]byte, need)
 	}
-	if _, err := r.sess.Write(msg); err != nil {
-		return fmt.Errorf("kcp write payload: %w", err)
+	buf := r.writeBuf[:need]
+	binary.BigEndian.PutUint32(buf[:kcpLenPrefix], uint32(len(msg))) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
+	copy(buf[kcpLenPrefix:], msg)
+
+	if _, err := r.sess.Write(buf); err != nil {
+		return fmt.Errorf("kcp write framed message: %w", err)
 	}
 	return nil
 }
@@ -165,4 +169,123 @@ func (r *kcpRuntime) close() {
 		_ = r.sess.Close()
 		_ = r.conn.Close()
 	})
+}
+
+// kcpPlane owns one KCP session together with the outbound queue that carries
+// its packets. The transport runs two of them - bulk data and control - with
+// identical lifecycle rules, so start/restart/drain/close live here once
+// instead of being written twice with only the field names changed.
+type kcpPlane struct {
+	out    chan *packetBuffer
+	onData func([]byte)
+
+	// lifecycleMu serializes start/restart/close. Without it two concurrent
+	// restarts - a provider reconnect and an upper-layer ResetPeer fire
+	// together during recovery - both build a runtime and the loser is
+	// overwritten in place, stranding its goroutines and KCP windows for the
+	// lifetime of the process. mu stays narrow: it only guards the pointer
+	// read on the send hot path.
+	lifecycleMu sync.Mutex
+	closed      bool
+
+	mu   sync.RWMutex
+	rt   *kcpRuntime
+	once sync.Once
+}
+
+func newKCPPlane(queueSize int, onData func([]byte)) *kcpPlane {
+	return &kcpPlane{out: make(chan *packetBuffer, queueSize), onData: onData}
+}
+
+// get returns the live runtime, or nil when the plane has not started (or is
+// mid-restart).
+func (p *kcpPlane) get() *kcpRuntime {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.rt
+}
+
+// set installs rt directly. Used by tests to attach a hand-built runtime.
+func (p *kcpPlane) set(rt *kcpRuntime) {
+	p.mu.Lock()
+	p.rt = rt
+	p.mu.Unlock()
+}
+
+// start brings the plane up exactly once however many times Connect runs. The
+// first result reports whether this call was the one that started it.
+func (p *kcpPlane) start(hdr [epochHdrLen]byte) (bool, error) {
+	var (
+		started bool
+		err     error
+	)
+
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	p.once.Do(func() {
+		if p.closed {
+			return
+		}
+		var rt *kcpRuntime
+		rt, err = startKCP(p.out, p.onData, hdr)
+		if err != nil {
+			return
+		}
+		p.set(rt)
+		started = true
+	})
+
+	return started, err
+}
+
+// restart drops queued packets and replaces the KCP state machine with a
+// fresh one stamped with hdr.
+func (p *kcpPlane) restart(hdr [epochHdrLen]byte) {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	if p.closed {
+		return
+	}
+
+	p.drain()
+
+	p.mu.Lock()
+	old := p.rt
+	p.rt = nil
+	p.mu.Unlock()
+
+	if old != nil {
+		old.close()
+	}
+
+	rt, err := startKCP(p.out, p.onData, hdr)
+	if err != nil {
+		return
+	}
+	p.set(rt)
+}
+
+// drain discards everything still queued for the paced writer.
+func (p *kcpPlane) drain() {
+	for {
+		select {
+		case packet := <-p.out:
+			packet.release()
+		default:
+			return
+		}
+	}
+}
+
+func (p *kcpPlane) close() {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	p.closed = true
+
+	if rt := p.get(); rt != nil {
+		rt.close()
+	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/uuid"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/routing"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/bridge"
+	oltunnel "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/pkg/olcrtc/tunnel"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet/stat"
 )
@@ -53,13 +53,32 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 // Serve brings up the server carrier and blocks until ctx is cancelled. Each
 // accepted tunnel stream is authenticated by authHook and its target dispatched
 // through Xray's router; the resulting link is piped against the stream.
+//
+// A maxSessionDuration is applied by bounding this call's context. Returning
+// hands control back to SelfDrivenInboundHandler, whose restart loop brings a
+// fresh carrier up — which is exactly what a planned rebuild is, and needs no
+// rotation machinery of its own.
 func (s *Server) Serve(ctx context.Context) error {
+	cfg, err := serverConfig(s.config)
+	if err != nil {
+		return err
+	}
+	cfg.AuthHook = s.authHook
+
+	maxSession, err := optionalDuration(s.config.GetMaxSessionDuration(), "maxSessionDuration")
+	if err != nil {
+		return err
+	}
+	if maxSession > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, maxSession)
+		defer cancel()
+	}
+
 	dial := func(dctx context.Context, addr string, port int, sessionID string) (net.Conn, error) {
 		return s.dispatch(dctx, addr, port, sessionID)
 	}
-	cfg := serverBridgeConfig(s.config)
-	cfg.AuthHook = s.authHook
-	if err := bridge.RunServer(ctx, cfg, dial); err != nil {
+	if err := oltunnel.NewWithDial(cfg, dial).Run(ctx); err != nil {
 		return errors.New("olcrtc inbound ended").Base(err)
 	}
 	return nil

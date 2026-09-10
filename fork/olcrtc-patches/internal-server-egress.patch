@@ -1,0 +1,11 @@
+--- a/internal/server/egress.go
++++ b/internal/server/egress.go
+@@ -44,7 +44,7 @@
+ 	addr := net.JoinHostPort(request.Addr, strconv.Itoa(request.Port))
+ 	logger.Infof("sid=%d connect %s", stream.ID(), addr)
+ 	started := time.Now()
+-	conn, err := s.dial(request)
++	conn, err := s.dialFor(ctx, request, sessionID)
+ 	elapsed := time.Since(started)
+ 	if err != nil {
+ 		logger.Infof("sid=%d dial %s failed (%v): %v", stream.ID(), addr, elapsed, err)

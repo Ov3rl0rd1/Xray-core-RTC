@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  olcrtc — keep the vendored olcRTC library in step with its upstream.
+#
+#  proxy/olcrtc/olcrtclib is a copy of github.com/openlibrecommunity/olcrtc
+#  with its import paths rewritten onto this module. Nothing watched it, and by
+#  the time anyone looked, 41 of 43 files had changed upstream and 8 were gone
+#  — including a rewrite of the crypto and a refactor that moved most of the
+#  client and server into a new package. This tool is what stops that
+#  happening again.
+#
+#  The model mirrors fork/bin/fork, because the problem is the same one:
+#
+#    manifest  fork/olcrtc-manifest.txt  what is vendored, what is skipped,
+#                                        and which files inside the vendored
+#                                        tree are ours
+#    patches   fork/olcrtc-patches/      the few lines we need *inside*
+#                                        upstream's files — the only thing a
+#                                        new olcRTC release can conflict with
+#    ref       fork/olcrtc.txt           the upstream commit we are on
+#
+#  Commands:
+#    olcrtc status                what we are vendored at
+#    olcrtc vendor <src> [<ref>]  re-vendor from a checkout (or a fresh clone)
+#    olcrtc export                regenerate patches from the working tree
+#    olcrtc diff <src> [<ref>]    what changed upstream since we vendored
+#
+#  Typical update:
+#    olcrtc diff ~/src/olcrtc          # see what moved
+#    olcrtc vendor ~/src/olcrtc        # bring it over, patches and all
+#    go build ./... && go test ./proxy/olcrtc/...
+# =============================================================================
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FORK_DIR="$ROOT/fork"
+MANIFEST="$FORK_DIR/olcrtc-manifest.txt"
+PATCH_DIR="$FORK_DIR/olcrtc-patches"
+REF_FILE="$FORK_DIR/olcrtc.txt"
+
+VENDOR_REL="proxy/olcrtc/olcrtclib"
+VENDOR_DIR="$ROOT/$VENDOR_REL"
+UPSTREAM_MODULE="github.com/openlibrecommunity/olcrtc"
+VENDOR_MODULE="github.com/xtls/xray-core/proxy/olcrtc/olcrtclib"
+UPSTREAM_URL="https://github.com/openlibrecommunity/olcrtc.git"
+
+# ── output ───────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+    B=$'\033[1m'; R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
+else
+    B=""; R=""; G=""; Y=""; N=""
+fi
+info() { printf '%s==>%s %s\n' "$B" "$N" "$*"; }
+ok()   { printf '%s  ok%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '%s  !!%s %s\n' "$Y" "$N" "$*" >&2; }
+die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+
+# Comparisons ignore trailing carriage returns. Git hands out LF from the
+# object store and CRLF into a Windows working tree, so a `git archive` export
+# and a checkout of the same commit differ on every single line; a vendoring
+# tool has no business noticing that. diff's own flag does it, which beats
+# stripping the bytes ourselves and getting the escaping wrong.
+DIFF_OPTS="--strip-trailing-cr"
+
+# ── manifest ─────────────────────────────────────────────────────────────────
+
+# manifest_lines <marker> — the paths carrying that marker, one per line.
+# awk rather than grep: the markers include '+', which an ERE would read as a
+# quantifier, and an empty result must not trip `set -e`.
+manifest_lines() {
+    sed -e 's/#.*//' "$MANIFEST" | awk -v m="$1" '$1 == m { print $2 }'
+}
+
+vendored_paths() { manifest_lines '+'; }
+skipped_paths()  { manifest_lines '-'; }
+our_paths()      { manifest_lines '='; }
+
+current_ref() { tr -d ' \t\r\n' < "$REF_FILE" 2>/dev/null || echo "unknown"; }
+
+# ── source tree ──────────────────────────────────────────────────────────────
+#
+# Accepts a local checkout so an update can be tried against a working tree
+# before it is pushed anywhere. Without one, clones upstream.
+resolve_source() {
+    local src="${1:-}" ref="${2:-}" dest="$3"
+
+    if [ -n "$src" ]; then
+        [ -d "$src/.git" ] || die "$src is not a git checkout of olcrtc"
+        local at="${ref:-HEAD}"
+        git -C "$src" rev-parse --verify --quiet "$at^{commit}" >/dev/null \
+            || die "unknown ref '$at' in $src"
+        info "exporting $at from $src"
+        git -C "$src" archive --format=tar "$at" | (mkdir -p "$dest" && tar -x -C "$dest")
+        git -C "$src" rev-parse "$at"
+        return
+    fi
+
+    info "cloning $UPSTREAM_URL"
+    git clone --quiet "$UPSTREAM_URL" "$dest.git" >/dev/null 2>&1 \
+        || die "could not clone $UPSTREAM_URL"
+    local at="${ref:-HEAD}"
+    git -C "$dest.git" rev-parse --verify --quiet "$at^{commit}" >/dev/null \
+        || die "unknown ref '$at'"
+    git -C "$dest.git" archive --format=tar "$at" | (mkdir -p "$dest" && tar -x -C "$dest")
+    git -C "$dest.git" rev-parse "$at"
+    rm -rf "$dest.git"
+}
+
+# ── vendor ───────────────────────────────────────────────────────────────────
+cmd_vendor() {
+    local src="${1:-}" ref="${2:-}"
+    local tmp; tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+
+    local sha; sha="$(resolve_source "$src" "$ref" "$tmp/src" | tail -1)"
+    info "vendoring olcrtc $sha"
+
+    # Preserve our own files before the tree is cleared under them.
+    local keep="$tmp/keep"
+    mkdir -p "$keep"
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        if [ -e "$VENDOR_DIR/$path" ]; then
+            mkdir -p "$keep/$(dirname "$path")"
+            cp -R "$VENDOR_DIR/$path" "$keep/$(dirname "$path")/"
+        fi
+    done < <(our_paths)
+
+    # Replace each vendored root wholesale. Anything upstream deleted has to
+    # disappear here too, which copying over the top would never achieve.
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        [ -e "$tmp/src/$path" ] || die "manifest vendors '$path', which upstream does not have"
+        rm -rf "${VENDOR_DIR:?}/$path"
+        mkdir -p "$VENDOR_DIR/$(dirname "$path")"
+        cp -R "$tmp/src/$path" "$VENDOR_DIR/$(dirname "$path")/"
+        ok "$path"
+    done < <(vendored_paths)
+
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        rm -rf "${VENDOR_DIR:?}/$path"
+        ok "skipped $path"
+    done < <(skipped_paths)
+
+    # Patches go on before the import rewrite, while the files still read
+    # exactly as upstream wrote them. Rewriting first would move a line that
+    # half of these patches use as context, and every one of them would fail
+    # for a reason that has nothing to do with what upstream changed.
+    info "applying patches"
+    local failed=""
+    for patch in "$PATCH_DIR"/*.patch; do
+        [ -e "$patch" ] || continue
+        local name; name="$(basename "$patch")"
+        if git -C "$ROOT" apply --whitespace=nowarn --directory="$VENDOR_REL" "$patch" 2>/dev/null; then
+            ok "$name"
+        else
+            warn "$name did NOT apply"
+            failed="$failed $name"
+        fi
+    done
+
+    info "rewriting import paths"
+    local count=0
+    while IFS= read -r -d '' file; do
+        if grep -q "$UPSTREAM_MODULE" "$file"; then
+            sed -i "s|${UPSTREAM_MODULE}|${VENDOR_MODULE}|g" "$file"
+            count=$((count + 1))
+        fi
+    done < <(find "$VENDOR_DIR" -name '*.go' -print0)
+    ok "$count files"
+
+    # .gitattributes declares "*.go text eol=lf" for a reason: gofmt rewrites
+    # CRLF, so a CRLF working tree makes every vendored file look unformatted
+    # and would have `go run ./infra/vformat` rewrite the lot. Whatever the
+    # export handed us, it leaves here as LF.
+    info "normalizing line endings"
+    while IFS= read -r -d '' file; do
+        sed -i "s/\r$//" "$file"
+    done < <(find "$VENDOR_DIR" -name '*.go' -print0)
+    ok "LF"
+
+    # Ours go back last: they already speak this module's import paths, so the
+    # rewrite above must not touch them.
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        if [ -e "$keep/$path" ]; then
+            mkdir -p "$VENDOR_DIR/$(dirname "$path")"
+            cp -R "$keep/$path" "$VENDOR_DIR/$(dirname "$path")/"
+            ok "kept $path"
+        else
+            warn "manifest claims '$path' is ours, but there was no such file"
+        fi
+    done < <(our_paths)
+
+    printf '%s\n' "$sha" > "$REF_FILE"
+
+    if [ -n "$failed" ]; then
+        warn "conflicts left in the tree:$failed"
+        printf '  resolve them, then run: %s export\n' "$0"
+        return 3
+    fi
+    ok "vendored at $sha"
+}
+
+# ── export: regenerate patches from the tree ─────────────────────────────────
+#
+# Patches are derived from the working tree, never hand-edited, exactly as in
+# fork/bin/fork. Each patch is named after the upstream file it edits.
+cmd_export() {
+    local src="${1:-}" ref="${2:-$(current_ref)}"
+    [ "$ref" != "unknown" ] || die "no vendored ref recorded; run 'olcrtc vendor' first"
+
+    local tmp; tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+    resolve_source "$src" "$ref" "$tmp/src" >/dev/null
+
+    mkdir -p "$PATCH_DIR"
+    rm -f "$PATCH_DIR"/*.patch
+
+    local ours; ours="$(our_paths)"
+    local n=0
+    while IFS= read -r -d '' file; do
+        local rel="${file#"$VENDOR_DIR"/}"
+        # Our own files are not patches; they are the whole file.
+        if printf '%s\n' "$ours" | grep -Fxq "$rel"; then continue; fi
+        local up="$tmp/src/$rel"
+        [ -e "$up" ] || continue
+
+        # Compare against upstream with the import rewrite undone, so the patch
+        # records only what we actually changed.
+        local mine="$tmp/mine"
+        sed "s|${VENDOR_MODULE}|${UPSTREAM_MODULE}|g" "$file" > "$mine"
+        if diff -q $DIFF_OPTS "$up" "$mine" >/dev/null 2>&1; then continue; fi
+
+        local name; name="$(printf '%s' "$rel" | tr '/' '-' | sed 's/\.go$//')"
+        (cd "$tmp" && diff -u $DIFF_OPTS "src/$rel" "mine" \
+            | sed -e "1s|.*|--- a/$rel|" -e "2s|.*|+++ b/$rel|") \
+            > "$PATCH_DIR/$name.patch" || true
+        ok "$name.patch"
+        n=$((n + 1))
+    done < <(find "$VENDOR_DIR" -name '*.go' -print0)
+
+    if [ "$n" -eq 0 ]; then
+        info "no edits inside upstream files — everything the fork adds is its own file"
+    fi
+}
+
+# ── diff: what has moved upstream since we vendored ──────────────────────────
+cmd_diff() {
+    local src="${1:-}" ref="${2:-}"
+    local tmp; tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+
+    local sha; sha="$(resolve_source "$src" "$ref" "$tmp/src" | tail -1)"
+    local base; base="$(current_ref)"
+    info "vendored at $base, comparing against $sha"
+
+    local ours; ours="$(our_paths)"
+    local changed=0 gone=0 added=0
+    while IFS= read -r -d '' file; do
+        local rel="${file#"$VENDOR_DIR"/}"
+        if printf '%s\n' "$ours" | grep -Fxq "$rel"; then continue; fi
+        local up="$tmp/src/$rel"
+        if [ ! -e "$up" ]; then
+            printf '  %sgone%s     %s\n' "$R" "$N" "$rel"
+            gone=$((gone + 1))
+            continue
+        fi
+        local mine="$tmp/mine"
+        sed "s|${VENDOR_MODULE}|${UPSTREAM_MODULE}|g" "$file" > "$mine"
+        if ! diff -q $DIFF_OPTS "$mine" "$up" >/dev/null 2>&1; then
+            local n; n="$(diff -u $DIFF_OPTS "$mine" "$up" | grep -cE '^[+-][^+-]' || true)"
+            printf '  %schanged%s  %-58s %s lines\n' "$Y" "$N" "$rel" "$n"
+            changed=$((changed + 1))
+        fi
+    done < <(find "$VENDOR_DIR" -name '*.go' -print0)
+
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        while IFS= read -r -d '' up; do
+            local rel="${up#"$tmp/src"/}"
+            skipped "$rel" && continue
+            [ -e "$VENDOR_DIR/$rel" ] || {
+                printf '  %snew%s      %s\n' "$G" "$N" "$rel"
+                added=$((added + 1))
+            }
+        done < <(find "$tmp/src/$path" -name '*.go' -print0 2>/dev/null)
+    done < <(vendored_paths)
+
+    printf '\n  %d changed, %d gone, %d new\n' "$changed" "$gone" "$added"
+}
+
+skipped() {
+    local rel="$1"
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        case "$rel" in "$path"/*|"$path") return 0;; esac
+    done < <(skipped_paths)
+    return 1
+}
+
+# ── status ───────────────────────────────────────────────────────────────────
+cmd_status() {
+    printf '%svendored olcrtc:%s %s\n' "$B" "$N" "$(current_ref)"
+    printf '%svendored paths:%s  %s\n' "$B" "$N" "$(vendored_paths | tr '\n' ' ')"
+    printf '%sskipped:%s         %s\n' "$B" "$N" "$(skipped_paths | tr '\n' ' ')"
+    printf '%sours:%s            %s\n' "$B" "$N" "$(our_paths | tr '\n' ' ')"
+    local patches; patches="$(find "$PATCH_DIR" -name '*.patch' 2>/dev/null | wc -l | tr -d ' ')"
+    printf '%spatches:%s         %s\n' "$B" "$N" "$patches"
+    printf '%sgo files:%s        %s\n' "$B" "$N" \
+        "$(find "$VENDOR_DIR" -name '*.go' | wc -l | tr -d ' ')"
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+case "${1:-status}" in
+    status)  cmd_status ;;
+    vendor)  shift; cmd_vendor "$@" ;;
+    export)  shift; cmd_export "$@" ;;
+    diff)    shift; cmd_diff "$@" ;;
+    *)       die "unknown command '${1}' (status, vendor, export, diff)" ;;
+esac

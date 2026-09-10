@@ -1,0 +1,12 @@
+--- a/internal/app/session/session_test.go
++++ b/internal/app/session/session_test.go
+@@ -26,7 +26,8 @@
+ 	}
+ 	wg.Wait()
+ 
+-	for _, name := range []string{"jitsi", "none", "telemost", "wbstream"} {
++	// jitsi is not vendored in this fork; see fork/olcrtc-manifest.txt.
++	for _, name := range []string{"none", "telemost", "wbstream"} {
+ 		if !slices.Contains(enginebuiltin.Available(), name) {
+ 			t.Fatalf("provider %q is not registered", name)
+ 		}

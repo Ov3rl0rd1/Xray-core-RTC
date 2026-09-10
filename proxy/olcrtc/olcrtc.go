@@ -13,14 +13,21 @@
 // Traffic is disguised as an ordinary video call on an allowed SFU service
 // (Yandex Telemost, WbStream) and additionally encrypted with a shared
 // XChaCha20-Poly1305 key.
+//
+// The library itself is vendored under olcrtclib and kept in step with its
+// upstream by fork/bin/olcrtc; this package talks to it only through the
+// public API under olcrtclib/pkg.
 package olcrtc
 
 import (
 	"context"
+	"time"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/proxy"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/bridge"
+	olclient "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/pkg/olcrtc/client"
+	oltunnel "github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/pkg/olcrtc/tunnel"
 )
 
 // Compile-time guarantees that the inbound Server satisfies the interfaces the
@@ -45,83 +52,138 @@ func init() {
 	proxy.RegisterSelfDrivenInbound((*ServerConfig)(nil))
 }
 
-// clientBridgeConfig maps the outbound proto config to a bridge.Config.
-func clientBridgeConfig(c *ClientConfig) bridge.Config {
-	return bridge.Config{
-		Provider:           c.GetProvider(),
-		Transport:          c.GetTransport(),
-		RoomID:             c.GetRoomId(),
-		KeyHex:             c.GetKey(),
-		DNSServer:          c.GetDnsServer(),
-		AuthToken:          c.GetAuthToken(),
-		Engine:             c.GetEngine(),
-		URL:                c.GetUrl(),
-		Token:              c.GetToken(),
-		VP8:                &bridge.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())},
-		SEI:                seiOptions(c.GetSeiFps(), c.GetSeiBatchSize(), c.GetSeiFragmentSize(), c.GetSeiAckTimeoutMs()),
-		Video:              videoOptions(c),
-		LivenessInterval:   c.GetLivenessInterval(),
-		LivenessTimeout:    c.GetLivenessTimeout(),
-		LivenessFailures:   int(c.GetLivenessFailures()),
-		MaxSessionDuration: c.GetMaxSessionDuration(),
-		DeviceID:           c.GetDeviceId(),
-		DeviceIDPath:       c.GetDeviceIdPath(),
+// clientConfig maps the outbound proto config onto the library's client config.
+func clientConfig(c *ClientConfig) (olclient.Config, error) {
+	liveness, err := liveness(c.GetLivenessInterval(), c.GetLivenessTimeout(), int(c.GetLivenessFailures()))
+	if err != nil {
+		return olclient.Config{}, err
 	}
+	return olclient.Config{
+		Transport:        c.GetTransport(),
+		Provider:         c.GetProvider(),
+		RoomURL:          c.GetRoomId(),
+		KeyHex:           c.GetKey(),
+		DNSServer:        c.GetDnsServer(),
+		ProviderToken:    c.GetAuthToken(),
+		Engine:           c.GetEngine(),
+		URL:              c.GetUrl(),
+		Token:            c.GetToken(),
+		TransportOptions: clientTransportOptions(c),
+		Liveness:         olclient.LivenessConfig(liveness),
+		DeviceID:         c.GetDeviceId(),
+		DeviceIDPath:     c.GetDeviceIdPath(),
+	}, nil
 }
 
-// serverBridgeConfig maps the inbound proto config to a bridge.Config.
-func serverBridgeConfig(c *ServerConfig) bridge.Config {
-	return bridge.Config{
-		Provider:  c.GetProvider(),
-		Transport: c.GetTransport(),
-		RoomID:    c.GetRoomId(),
-		KeyHex:    c.GetKey(),
-		DNSServer: c.GetDnsServer(),
-		AuthToken: c.GetAuthToken(),
-		Engine:    c.GetEngine(),
-		URL:       c.GetUrl(),
-		Token:     c.GetToken(),
-		VP8:       &bridge.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())},
-		SEI:       seiOptions(c.GetSeiFps(), c.GetSeiBatchSize(), c.GetSeiFragmentSize(), c.GetSeiAckTimeoutMs()),
-		Video: &bridge.VideoOptions{
+// serverConfig maps the inbound proto config onto the library's server config.
+func serverConfig(c *ServerConfig) (oltunnel.Config, error) {
+	liveness, err := liveness(c.GetLivenessInterval(), c.GetLivenessTimeout(), int(c.GetLivenessFailures()))
+	if err != nil {
+		return oltunnel.Config{}, err
+	}
+	return oltunnel.Config{
+		Transport:        c.GetTransport(),
+		Provider:         c.GetProvider(),
+		RoomURL:          c.GetRoomId(),
+		KeyHex:           c.GetKey(),
+		DNSServer:        c.GetDnsServer(),
+		ProviderToken:    c.GetAuthToken(),
+		Engine:           c.GetEngine(),
+		URL:              c.GetUrl(),
+		Token:            c.GetToken(),
+		TransportOptions: serverTransportOptions(c),
+		Liveness:         liveness,
+	}, nil
+}
+
+// liveness parses the control-stream tuning, which the JSON config carries as
+// Go duration strings. Empty values leave the library's defaults in place.
+func liveness(interval, timeout string, failures int) (oltunnel.LivenessConfig, error) {
+	cfg := oltunnel.LivenessConfig{Failures: failures}
+	var err error
+	if cfg.Interval, err = optionalDuration(interval, "livenessInterval"); err != nil {
+		return cfg, err
+	}
+	if cfg.Timeout, err = optionalDuration(timeout, "livenessTimeout"); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func optionalDuration(value, field string) (time.Duration, error) {
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, errors.New("olcrtc: ", field, ": ", value, " is not a duration").Base(err)
+	}
+	if d < 0 {
+		return 0, errors.New("olcrtc: ", field, " must not be negative")
+	}
+	return d, nil
+}
+
+// Transport tuning is now one value rather than three, so only the options for
+// the transport actually in use are built. An unrecognised transport yields nil
+// and the library reports it, rather than this package having to know the list.
+func clientTransportOptions(c *ClientConfig) olclient.TransportOptions {
+	switch c.GetTransport() {
+	case transportVP8:
+		return olclient.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())}
+	case transportSEI:
+		return olclient.SEIOptions{
+			FPS:          int(c.GetSeiFps()),
+			BatchSize:    int(c.GetSeiBatchSize()),
+			FragmentSize: int(c.GetSeiFragmentSize()),
+			AckTimeoutMS: int(c.GetSeiAckTimeoutMs()),
+		}
+	case transportVideo:
+		return olclient.VideoOptions{
 			Width:      int(c.GetVideoWidth()),
 			Height:     int(c.GetVideoHeight()),
 			FPS:        int(c.GetVideoFps()),
-			Bitrate:    c.GetVideoBitrate(),
-			HW:         c.GetVideoHw(),
 			QRSize:     int(c.GetVideoQrSize()),
 			QRRecovery: c.GetVideoQrRecovery(),
 			Codec:      c.GetVideoCodec(),
 			TileModule: int(c.GetVideoTileModule()),
 			TileRS:     int(c.GetVideoTileRs()),
-		},
-		LivenessInterval:   c.GetLivenessInterval(),
-		LivenessTimeout:    c.GetLivenessTimeout(),
-		LivenessFailures:   int(c.GetLivenessFailures()),
-		MaxSessionDuration: c.GetMaxSessionDuration(),
+		}
+	default:
+		return nil
 	}
 }
 
-func seiOptions(fps, batch, frag, ackMs int32) *bridge.SEIOptions {
-	return &bridge.SEIOptions{
-		FPS:          int(fps),
-		BatchSize:    int(batch),
-		FragmentSize: int(frag),
-		AckTimeoutMS: int(ackMs),
+func serverTransportOptions(c *ServerConfig) oltunnel.TransportOptions {
+	switch c.GetTransport() {
+	case transportVP8:
+		return oltunnel.VP8Options{FPS: int(c.GetVp8Fps()), BatchSize: int(c.GetVp8BatchSize())}
+	case transportSEI:
+		return oltunnel.SEIOptions{
+			FPS:          int(c.GetSeiFps()),
+			BatchSize:    int(c.GetSeiBatchSize()),
+			FragmentSize: int(c.GetSeiFragmentSize()),
+			AckTimeoutMS: int(c.GetSeiAckTimeoutMs()),
+		}
+	case transportVideo:
+		return oltunnel.VideoOptions{
+			Width:      int(c.GetVideoWidth()),
+			Height:     int(c.GetVideoHeight()),
+			FPS:        int(c.GetVideoFps()),
+			QRSize:     int(c.GetVideoQrSize()),
+			QRRecovery: c.GetVideoQrRecovery(),
+			Codec:      c.GetVideoCodec(),
+			TileModule: int(c.GetVideoTileModule()),
+			TileRS:     int(c.GetVideoTileRs()),
+		}
+	default:
+		return nil
 	}
 }
 
-func videoOptions(c *ClientConfig) *bridge.VideoOptions {
-	return &bridge.VideoOptions{
-		Width:      int(c.GetVideoWidth()),
-		Height:     int(c.GetVideoHeight()),
-		FPS:        int(c.GetVideoFps()),
-		Bitrate:    c.GetVideoBitrate(),
-		HW:         c.GetVideoHw(),
-		QRSize:     int(c.GetVideoQrSize()),
-		QRRecovery: c.GetVideoQrRecovery(),
-		Codec:      c.GetVideoCodec(),
-		TileModule: int(c.GetVideoTileModule()),
-		TileRS:     int(c.GetVideoTileRs()),
-	}
-}
+// Transport names, as they appear in the JSON config.
+const (
+	transportVP8   = "vp8channel"
+	transportSEI   = "seichannel"
+	transportVideo = "videochannel"
+)

@@ -1,0 +1,38 @@
+--- a/internal/engine/builtin/builtin.go
++++ b/internal/engine/builtin/builtin.go
+@@ -14,12 +14,10 @@
+ 	"sync"
+ 
+ 	"github.com/openlibrecommunity/olcrtc/internal/auth"
+-	authJitsi "github.com/openlibrecommunity/olcrtc/internal/auth/jitsi"
+ 	authTelemost "github.com/openlibrecommunity/olcrtc/internal/auth/telemost"
+ 	authWBStream "github.com/openlibrecommunity/olcrtc/internal/auth/wbstream"
+ 	"github.com/openlibrecommunity/olcrtc/internal/engine"
+ 	"github.com/openlibrecommunity/olcrtc/internal/engine/goolom"
+-	engineJitsi "github.com/openlibrecommunity/olcrtc/internal/engine/jitsi"
+ 	"github.com/openlibrecommunity/olcrtc/internal/engine/livekit"
+ )
+ 
+@@ -102,15 +100,18 @@
+ 	return names
+ }
+ 
+-// RegisterDefaults wires the built-in providers: jitsi, telemost, wbstream
+-// and "none" (direct engine access).
++// RegisterDefaults wires the built-in providers: telemost, wbstream and
++// "none" (direct engine access).
++//
++// jitsi is deliberately absent. This build serves telemost and wbstream only,
++// and jitsi is the sole reason the module would otherwise depend on
++// github.com/zarazaex69/j; see fork/olcrtc-manifest.txt, which also stops its
++// sources being vendored.
+ func RegisterDefaults() {
+ 	engine.Register("livekit", livekit.New)
+ 	engine.Register("goolom", goolom.New)
+-	engine.Register("jitsi", engineJitsi.New)
+ 	register("wbstream", authWBStream.Provider{})
+ 	register("telemost", authTelemost.Provider{})
+-	register("jitsi", authJitsi.Provider{})
+ 	register("none", nil)
+ }
+ 

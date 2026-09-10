@@ -2,112 +2,85 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
+	"github.com/xtaci/smux"
+
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/tunnelcore"
 )
 
-// Tunnel is a live client-side carrier session. It brings up the WebRTC
-// carrier, completes the handshake and runs the background control/reconnect
-// loops, but - unlike Run - it does NOT start a local SOCKS5 listener. Callers
-// open one multiplexed stream per target connection via DialContext.
-//
-// A Tunnel is safe for concurrent use: DialContext may be called from many
-// goroutines at once, each obtaining an independent smux stream over the shared
-// carrier.
-type Tunnel struct {
-	c      *Client
-	cancel context.CancelFunc
-}
-
-// StartTunnel brings up the carrier link described by cfg and returns a Tunnel
-// ready for DialContext. The tunnel keeps running (reconnecting as needed)
-// until Close is called or the ctx passed here is cancelled.
-func StartTunnel(ctx context.Context, cfg Config) (*Tunnel, error) {
-	runCtx, cancel := context.WithCancel(ctx)
-
-	cipher, err := setupCipher(cfg.KeyHex)
+func (c *Client) tunnel(
+	ctx context.Context,
+	conn net.Conn,
+	session *smux.Session,
+	targetAddr string,
+	targetPort int,
+) {
+	stream, err := session.OpenStream()
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("setupCipher failed: %w", err)
+		logger.Warnf("OpenStream failed: %v", err)
+		_, _ = conn.Write(replyHostUnreachable(targetAddr))
+		return
 	}
+	defer func() { _ = stream.Close() }()
+	logger.Infof("sid=%d tunnel to %s:%d", stream.ID(), targetAddr, targetPort)
+	if err := c.sendConnectRequest(stream, targetAddr, targetPort); err != nil {
+		logger.Warnf("sid=%d connect failed: %v", stream.ID(), err)
+		_, _ = conn.Write(replyForConnectError(err, targetAddr))
+		return
+	}
+	if _, err := conn.Write(replySuccess(targetAddr)); err != nil {
+		return
+	}
+	_, _ = tunnelcore.CopyBidirectional(ctx, conn, stream)
+}
 
-	deviceID, err := resolveDeviceID(cfg.DeviceID, cfg.DeviceIDPath)
+func (c *Client) sendConnectRequest(stream *smux.Stream, targetAddr string, targetPort int) error {
+	request, err := json.Marshal(map[string]any{
+		"cmd": "connect", "addr": targetAddr, "port": targetPort,
+	})
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("resolve device id: %w", err)
+		return fmt.Errorf("sid=%d marshal connect req: %w", stream.ID(), err)
 	}
-
-	c := &Client{
-		cipher:       cipher,
-		deviceID:     deviceID,
-		claims:       cfg.Claims,
-		dnsServer:    cfg.DNSServer,
-		socksUser:    cfg.SOCKSUser,
-		socksPass:    cfg.SOCKSPass,
-		health:       runtime.NewHealthTracker(cfg.OnHealth),
-		sessionReady: make(chan struct{}),
+	_ = stream.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if _, err := stream.Write(request); err != nil {
+		return fmt.Errorf("sid=%d write connect req: %w", stream.ID(), err)
 	}
-
-	if err := c.bringUpLink(runCtx, cfg, cancel); err != nil {
-		c.shutdown()
-		cancel()
-		return nil, err
+	_ = stream.SetWriteDeadline(time.Time{})
+	ack := make([]byte, 1)
+	_ = stream.SetReadDeadline(time.Now().Add(runtime.ConnectAckTimeout(c.ln)))
+	if _, err := io.ReadFull(stream, ack); err != nil {
+		return fmt.Errorf("sid=%d: %w (read_err=%w)", stream.ID(), ErrRemoteNotReady, err)
 	}
-
-	return &Tunnel{c: c, cancel: cancel}, nil
-}
-
-// DialContext opens a new tunnel stream to addr:port, sends the CONNECT request,
-// waits for the server to acknowledge readiness, and returns a net.Conn that
-// carries the tunneled bytes. The returned conn is backed by a single smux
-// stream over the shared carrier; closing it closes just that stream.
-//
-// If the carrier is mid-reconnect, DialContext blocks (up to an internal
-// timeout, or until ctx is cancelled) for the session to become ready again,
-// mirroring the local SOCKS5 path.
-func (t *Tunnel) DialContext(ctx context.Context, addr string, port int) (net.Conn, error) {
-	const sessionReadyTimeout = 60 * time.Second
-	readyCtx, cancel := context.WithTimeout(ctx, sessionReadyTimeout)
-	defer cancel()
-
-	for {
-		t.c.sessMu.RLock()
-		sess := t.c.session
-		sid := t.c.sessionID
-		t.c.sessMu.RUnlock()
-
-		if sess != nil && !sess.IsClosed() && sid != "" {
-			stream, err := sess.OpenStream()
-			if err != nil {
-				return nil, fmt.Errorf("open stream: %w", err)
-			}
-			if err := t.c.sendConnectRequest(stream, addr, port); err != nil {
-				_ = stream.Close()
-				return nil, fmt.Errorf("connect %s:%d: %w", addr, port, err)
-			}
-			// *smux.Stream implements net.Conn.
-			return stream, nil
-		}
-
-		select {
-		case <-readyCtx.Done():
-			return nil, fmt.Errorf("olcrtc tunnel not ready: %w", readyCtx.Err())
-		case <-t.c.readyChannel():
-			// session became ready (or reconnected); re-check
-		}
+	_ = stream.SetReadDeadline(time.Time{})
+	if ack[0] != tunnelcore.ConnectAckOK {
+		return &connectAckError{code: ack[0], streamID: stream.ID()}
 	}
-}
-
-// Status returns the latest client-side control health snapshot.
-func (t *Tunnel) Status() control.Status { return t.c.Status() }
-
-// Close tears down the tunnel and releases all carrier resources.
-func (t *Tunnel) Close() error {
-	t.cancel()
-	t.c.shutdown()
 	return nil
+}
+
+type connectAckError struct {
+	code     byte
+	streamID uint32
+}
+
+func (e *connectAckError) Error() string {
+	return fmt.Sprintf("sid=%d: %s (connect ack=0x%02x)", e.streamID, ErrRemoteNotReady, e.code)
+}
+
+func (e *connectAckError) Unwrap() error { return ErrRemoteNotReady }
+
+func replyForConnectError(err error, target string) []byte {
+	var ackErr *connectAckError
+	if errors.As(err, &ackErr) {
+		return socks5Reply(ackErr.code, target)
+	}
+	return replyHostUnreachable(target)
 }

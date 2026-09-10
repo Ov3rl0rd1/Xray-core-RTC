@@ -1,12 +1,25 @@
+# Direct dependencies this fork pins, on top of whatever upstream Xray requires.
+# `fork/bin/fork deps` re-pins these and lets `go mod tidy` derive the rest, so
+# go.mod and go.sum are never patched -- they are the two most conflict-prone
+# files in any Go fork and they do not need to be tracked.
+#
+# Most of these exist for the vendored olcRTC library; keep them in step with
+# fork/olcrtc.txt's go.mod. Deliberately absent:
+#   github.com/zarazaex69/j   jitsi only, and jitsi is not vendored
+#   github.com/magefile/mage  olcRTC's build tool
+#   golang.org/x/mobile       olcRTC's gomobile bindings
 codeberg.org/rape4me/kc v0.0.0-20260527075816-a7996790b05b
+github.com/google/uuid v1.6.0
 github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-github.com/livekit/protocol v1.49.0
-github.com/livekit/server-sdk-go/v2 v2.17.0
+github.com/livekit/protocol v1.50.1
+github.com/owenewans/owenlivekit/v2 v2.18.2
+github.com/pion/ice/v4 v4.2.7
 github.com/pion/interceptor v0.1.45
 github.com/pion/logging v0.2.4
 github.com/pion/rtp v1.10.3
 github.com/pion/transport/v4 v4.0.2
 github.com/pion/webrtc/v4 v4.2.16
+github.com/wlynxg/anet v0.0.5
 github.com/xtaci/kcp-go/v5 v5.6.72
 github.com/xtaci/smux v1.5.57
 github.com/zarazaex69/gr v0.1.5

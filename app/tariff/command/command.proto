@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package xray.app.tariff.command;
+option csharp_namespace = "Xray.App.Tariff.Command";
+option go_package = "github.com/xtls/xray-core/app/tariff/command";
+option java_package = "com.xray.app.tariff.command";
+option java_multiple_files = true;
+
+import "app/tariff/config.proto";
+
+message SetPolicyRequest {
+  xray.app.tariff.Policy policy = 1;
+}
+message SetPolicyResponse {}
+
+// SetPolicies pushes a whole roster at once.
+//
+// A panel that syncs periodically should use this with replace set: the server
+// then converges on exactly the users given, dropping any it holds that are
+// not in the list. That removes the need for the panel to work out what
+// changed, and it means a user deleted while the server was unreachable does
+// not survive forever.
+message SetPoliciesRequest {
+  repeated xray.app.tariff.Policy policies = 1;
+  bool replace = 2;
+}
+message SetPoliciesResponse {
+  uint32 applied = 1;
+  uint32 removed = 2;
+}
+
+message GetPolicyRequest {
+  string email = 1;
+}
+message GetPolicyResponse {
+  xray.app.tariff.Policy policy = 1;
+}
+
+message RemovePolicyRequest {
+  string email = 1;
+}
+message RemovePolicyResponse {}
+
+message ListPoliciesRequest {}
+message ListPoliciesResponse {
+  repeated xray.app.tariff.Policy policies = 1;
+}
+
+// GetUsage reports what users have spent. An empty email returns everyone.
+message GetUsageRequest {
+  string email = 1;
+}
+message GetUsageResponse {
+  repeated xray.app.tariff.Usage users = 1;
+}
+
+// AddUsage adds to a user's counters without any traffic having crossed this
+// server, for restoring a month-to-date figure after a state file is lost or a
+// subscription moves between servers. An empty inbound_tag adds to the total
+// without attributing it to any inbound.
+message AddUsageRequest {
+  string email = 1;
+  string inbound_tag = 2;
+  uint64 uplink = 3;
+  uint64 downlink = 4;
+}
+message AddUsageResponse {}
+
+// ResetUsage clears a user's counters and re-arms their quotas. An empty email
+// resets the server-wide allowance instead.
+message ResetUsageRequest {
+  string email = 1;
+}
+message ResetUsageResponse {}
+
+message SetServerQuotaRequest {
+  xray.app.tariff.ServerQuota quota = 1;
+}
+message SetServerQuotaResponse {}
+
+message SetConfigRequest {
+  xray.app.tariff.Config config = 1;
+}
+message SetConfigResponse {}
+
+message GetStatusRequest {}
+message GetStatusResponse {
+  uint32 users = 1;
+  uint32 connections = 2;
+  uint32 devices = 3;
+  uint32 event_subscribers = 4;
+  xray.app.tariff.QuotaState server_quota = 5;
+  xray.app.tariff.Config config = 6;
+}
+
+// Flush writes the state file immediately rather than waiting for the next
+// periodic write. Worth calling before a planned restart.
+message FlushRequest {}
+message FlushResponse {}
+
+// StreamEvents delivers changes as they happen, so a panel does not have to
+// poll to find out that a user went over their quota or connected from a new
+// device.
+//
+// A stream that stops being read loses events rather than applying
+// back-pressure to the data plane; dropped counts how many this stream has
+// missed since it started, so a client that cares can reconcile with GetUsage.
+message StreamEventsRequest {
+  // Only these kinds. Empty means every kind.
+  repeated xray.app.tariff.EventKind kinds = 1;
+  // Only this user. Empty means every user.
+  string email = 2;
+}
+message StreamEventsResponse {
+  xray.app.tariff.Event event = 1;
+  uint64 dropped = 2;
+}
+
+service TariffService {
+  rpc SetPolicy(SetPolicyRequest) returns (SetPolicyResponse) {}
+  rpc SetPolicies(SetPoliciesRequest) returns (SetPoliciesResponse) {}
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse) {}
+  rpc RemovePolicy(RemovePolicyRequest) returns (RemovePolicyResponse) {}
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse) {}
+
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse) {}
+  rpc AddUsage(AddUsageRequest) returns (AddUsageResponse) {}
+  rpc ResetUsage(ResetUsageRequest) returns (ResetUsageResponse) {}
+
+  rpc SetServerQuota(SetServerQuotaRequest) returns (SetServerQuotaResponse) {}
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse) {}
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse) {}
+  rpc Flush(FlushRequest) returns (FlushResponse) {}
+
+  rpc StreamEvents(StreamEventsRequest) returns (stream StreamEventsResponse) {}
+}
+
+// Config is the service's own configuration, named in the API's service list.
+message Config {}

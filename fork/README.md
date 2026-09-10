@@ -1,6 +1,6 @@
 # How this fork tracks upstream
 
-This repository is **XTLS/Xray-core plus four features**. Keeping those features
+This repository is **XTLS/Xray-core plus five features**. Keeping those features
 alive across upstream releases used to mean merging and resolving conflicts by
 hand; it is now mechanical, because the fork is stored as two things that behave
 very differently:
@@ -11,7 +11,7 @@ very differently:
 | **Patches** | `fork/patches/` — the handful of lines we need *inside* upstream files | Only these. |
 
 The whole design goal is to keep the second column as small as possible. It is
-currently **5 files and about 30 lines of actual code**, and three of the five
+currently **6 files and about 30 lines of actual code**, and four of the six
 patches are one-liners.
 
 `go.mod` / `go.sum` are deliberately in neither. They are the largest and most
@@ -25,6 +25,7 @@ versions we care about, and `go mod tidy` derives the rest.
 |---|---|---|
 | **olcRTC** — TCP-over-WebRTC proxy | `proxy/olcrtc/**` (63 files), `proxy/selfdriven.go`, `app/proxyman/inbound/selfdriven.go`, `infra/conf/olcrtc.go`, `infra/conf/fork_registry.go`, `main/distro/all/fork.go` | 6 lines in `inbound.go`, 1 in `infra/conf/xray.go` |
 | **Per-user traffic shaping** | `common/shaper/**`, `app/dispatcher/ratelimit.go` | 5 lines in `app/dispatcher/default.go` |
+| **Plans, quotas and usage** (+ its gRPC API) | `app/tariff/**`, `app/dispatcher/fork_usage.go` | 1 line in `infra/conf/api.go` |
 | **Pause/resume housekeeping** (battery, for the mobile client) | `common/pause/pause.go`, `transport/internet/hysteria/fork_pause.go` | 3 lines across `hysteria/conn.go` + `dialer.go` |
 | **libxray** — C ABI for the mobile client | `libxray/**`, `main/distro/lib/lib.go` | — |
 

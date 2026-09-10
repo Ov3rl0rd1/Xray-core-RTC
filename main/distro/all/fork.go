@@ -9,4 +9,10 @@ package all
 import (
 	// Proxies
 	_ "github.com/xtls/xray-core/proxy/olcrtc"
+
+	// The per-user policy and usage store's management API. Listing
+	// "TariffService" in api.services is what creates the store and attaches
+	// it to the dispatcher, so a server that does not ask for the API keeps
+	// the plain level-based plans and carries none of this.
+	_ "github.com/xtls/xray-core/app/tariff/command"
 )

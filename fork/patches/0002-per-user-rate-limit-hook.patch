@@ -1,5 +1,5 @@
 diff --git a/app/dispatcher/default.go b/app/dispatcher/default.go
-index 2717df5f..6e5bb214 100644
+index 2717df5f..5810f8e3 100644
 --- a/app/dispatcher/default.go
 +++ b/app/dispatcher/default.go
 @@ -182,6 +182,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
@@ -7,10 +7,10 @@ index 2717df5f..6e5bb214 100644
  			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
  		}
 +
-+		// Per-user traffic shaping. Hooked here at the dispatcher, it applies
-+		// across every protocol and all of the user's devices at once; see
-+		// ratelimit.go.
-+		inboundLink.Writer, outboundLink.Writer = rateLimitLink(ctx, user.Email, user.Level, inboundLink.Writer, outboundLink.Writer)
++		// Per-user shaping, accounting and quota enforcement. Hooked here at
++		// the dispatcher, it applies across every protocol and all of the
++		// user's devices at once; see ratelimit.go.
++		inboundLink.Writer, outboundLink.Writer = rateLimitLink(ctx, d, user, inboundLink.Writer, outboundLink.Writer)
  	}
  
  	return inboundLink, outboundLink

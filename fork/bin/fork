@@ -42,7 +42,7 @@ UPSTREAM_URL="https://github.com/XTLS/Xray-core.git"
 # Packages this fork owns code in, for `check` to vet and test. Upstream's own
 # vet findings are upstream's problem: failing on them would make this gate
 # useless the first time they land one, so it is deliberately not ./...
-FORK_PKGS="./proxy/olcrtc/... ./app/dispatcher/... ./common/shaper/... ./common/pause/... ./transport/internet/hysteria/..."
+FORK_PKGS="./proxy/olcrtc/... ./app/dispatcher/... ./app/tariff/... ./common/shaper/... ./common/pause/... ./transport/internet/hysteria/..."
 
 # ── output ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then

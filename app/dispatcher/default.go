@@ -183,10 +183,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
 		}
 
-		// Per-user traffic shaping. Hooked here at the dispatcher, it applies
-		// across every protocol and all of the user's devices at once; see
-		// ratelimit.go.
-		inboundLink.Writer, outboundLink.Writer = rateLimitLink(ctx, user.Email, user.Level, inboundLink.Writer, outboundLink.Writer)
+		// Per-user shaping, accounting and quota enforcement. Hooked here at
+		// the dispatcher, it applies across every protocol and all of the
+		// user's devices at once; see ratelimit.go.
+		inboundLink.Writer, outboundLink.Writer = rateLimitLink(ctx, d, user, inboundLink.Writer, outboundLink.Writer)
 	}
 
 	return inboundLink, outboundLink

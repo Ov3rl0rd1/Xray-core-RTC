@@ -1,0 +1,256 @@
+syntax = "proto3";
+
+package xray.app.tariff;
+option csharp_namespace = "Xray.App.Tariff";
+option go_package = "github.com/xtls/xray-core/app/tariff";
+option java_package = "com.xray.app.tariff";
+option java_multiple_files = true;
+
+// Window is the period a quota is measured over. Windows are aligned to the
+// calendar in UTC, so a monthly quota resets at 00:00 on the first — not one
+// month after whenever the user happened to first connect.
+//
+// A subscription that renews on its own billing day is served by leaving the
+// quota LIFETIME and having the panel call ResetUsage on that day; that keeps
+// the billing calendar where the billing system is, rather than duplicating it
+// here.
+enum Window {
+  WINDOW_LIFETIME = 0;
+  WINDOW_DAY = 1;
+  WINDOW_WEEK = 2;
+  WINDOW_MONTH = 3;
+}
+
+// Action is what happens when a quota is exhausted.
+enum Action {
+  // Emit an event and carry on. The panel decides what to do. This is the
+  // default because it is the only action that cannot surprise a paying user.
+  ACTION_NOTIFY = 0;
+  // Fall back to throttle_bps in both directions. The user stays connected and
+  // stays usable, just slowly.
+  ACTION_THROTTLE = 1;
+  // Refuse traffic outright: live connections start failing their next write
+  // and new ones never carry data.
+  ACTION_BLOCK = 2;
+}
+
+// Quota is a byte allowance measured over a window.
+message Quota {
+  // Which traffic counts towards it. Empty means all of the user's traffic;
+  // otherwise only traffic through the inbound with this tag.
+  //
+  // Tagging one inbound as the full-tunnel profile and another as the
+  // split-tunnel one is what lets a user carry, say, a small allowance on the
+  // profile that bypasses the whitelist alongside a large overall allowance.
+  string inbound_tag = 1;
+
+  // Bytes allowed within the window, uplink and downlink summed. Zero means no
+  // limit, which makes the quota a pure meter.
+  uint64 limit_bytes = 2;
+
+  Window window = 3;
+  Action action = 4;
+
+  // Rate to fall back to for ACTION_THROTTLE, in bytes per second. Zero uses
+  // the manager's default.
+  uint64 throttle_bps = 5;
+
+  // Fraction of limit_bytes at which a QUOTA_WARNING event fires, as a
+  // percentage. Zero uses 90.
+  uint32 warn_percent = 6;
+}
+
+// Policy is everything the server needs to know about one user. It is keyed by
+// email, which is the identity every Xray protocol agrees on.
+message Policy {
+  string email = 1;
+
+  // Aggregate caps in bytes per second, across every device, connection and
+  // protocol. Zero means unlimited.
+  //
+  // Bytes, not bits: 100 Mbit/s is 12500000.
+  uint64 uplink_bps = 2;
+  uint64 downlink_bps = 3;
+
+  // How much of the cap one device may hold while others are active, as a
+  // multiple of its equal share. Zero uses the shaper's default of 1.5.
+  double overcommit = 4;
+
+  // Speed boost. boost_bytes is the budget; boost_refill_seconds is how long an
+  // idle user takes to earn it back, which is what actually bounds the boost's
+  // cost; boost_ceil_bps caps throughput while it is being spent.
+  uint64 boost_bytes = 5;
+  int64 boost_refill_seconds = 6;
+  uint64 boost_ceil_bps = 7;
+
+  // Concurrent devices allowed. Zero means unlimited.
+  //
+  // A device is a source address, which is the only device identity a stock
+  // client offers. That makes the count an approximation in both directions: a
+  // household behind one NAT looks like one device, and a phone moving between
+  // cells briefly looks like two. device_limit_action therefore defaults to
+  // NOTIFY — locking a paying user out over a cell handover is a worse failure
+  // than letting a shared subscription through.
+  uint32 max_devices = 8;
+  Action device_limit_action = 9;
+
+  repeated Quota quotas = 10;
+
+  // Unix seconds after which the user is refused. Zero means never.
+  int64 expires_at = 11;
+
+  // Refuse this user outright, whatever their quotas say.
+  bool disabled = 12;
+}
+
+// ServerQuota is a byte allowance for the whole server, for the case where the
+// host itself is metered. It counts every user's traffic together.
+message ServerQuota {
+  uint64 limit_bytes = 1;
+  Window window = 2;
+  Action action = 3;
+  uint64 throttle_bps = 4;
+  uint32 warn_percent = 5;
+}
+
+// Device is one source of a user's traffic.
+message Device {
+  string key = 1;
+  int64 first_seen = 2;
+  int64 last_seen = 3;
+  // Connections currently open from it.
+  uint32 connections = 4;
+}
+
+// QuotaState is a quota plus how much of it has been spent.
+message QuotaState {
+  string inbound_tag = 1;
+  uint64 used_bytes = 2;
+  uint64 limit_bytes = 3;
+  Window window = 4;
+  Action action = 5;
+  // Unix seconds. window_resets is zero for a LIFETIME window.
+  int64 window_started = 6;
+  int64 window_resets = 7;
+  bool exceeded = 8;
+}
+
+// InboundUsage is a user's traffic through one inbound.
+message InboundUsage {
+  string tag = 1;
+  uint64 uplink = 2;
+  uint64 downlink = 3;
+}
+
+// Usage is everything the server knows about what a user has spent.
+//
+// These counters are the manager's own, deliberately not Xray's stats
+// counters: a panel calling QueryStats with reset=true would otherwise wipe the
+// numbers a monthly quota is enforced from.
+message Usage {
+  string email = 1;
+  uint64 uplink = 2;
+  uint64 downlink = 3;
+  repeated InboundUsage inbounds = 4;
+  repeated Device devices = 5;
+  repeated QuotaState quotas = 6;
+  // Connections currently open.
+  uint32 connections = 7;
+  // Effective caps right now, after quotas and expiry have been applied. Zero
+  // means unlimited; both zero with blocked set means refused.
+  uint64 effective_uplink_bps = 8;
+  uint64 effective_downlink_bps = 9;
+  bool blocked = 10;
+  string blocked_reason = 11;
+}
+
+// EventKind labels a change worth telling the panel about, so it can react
+// instead of polling.
+enum EventKind {
+  EVENT_UNKNOWN = 0;
+  EVENT_USER_CONNECTED = 1;
+  EVENT_USER_DISCONNECTED = 2;
+  EVENT_DEVICE_ADDED = 3;
+  EVENT_DEVICE_REMOVED = 4;
+  EVENT_DEVICE_LIMIT_HIT = 5;
+  EVENT_QUOTA_WARNING = 6;
+  EVENT_QUOTA_EXCEEDED = 7;
+  EVENT_QUOTA_RESET = 8;
+  EVENT_SERVER_QUOTA_WARNING = 9;
+  EVENT_SERVER_QUOTA_EXCEEDED = 10;
+  EVENT_SERVER_QUOTA_RESET = 11;
+  EVENT_POLICY_CHANGED = 12;
+  EVENT_POLICY_REMOVED = 13;
+  EVENT_USER_EXPIRED = 14;
+}
+
+// Event is one such change.
+message Event {
+  int64 unix_nano = 1;
+  EventKind kind = 2;
+  string email = 3;
+  string inbound_tag = 4;
+  string device = 5;
+  // Bytes for quota events, a count for device events, zero otherwise.
+  uint64 value = 6;
+  uint64 limit = 7;
+  string detail = 8;
+}
+
+// QuotaSpent is one quota's terms plus what has been spent against them,
+// persisted so that a restart does not hand every user a fresh allowance. The
+// terms travel with the counter because they are what identifies it: a quota
+// whose terms changed while the server was down is a different allowance, and
+// its spent bytes are dropped rather than applied to it.
+message QuotaSpent {
+  Quota spec = 1;
+  uint64 used = 2;
+  int64 window_started = 3;
+  bool exceeded = 4;
+  bool warned = 5;
+}
+
+// UserState is one user's persisted policy and counters.
+//
+// Devices are deliberately absent: the only thing they are enforced on is how
+// many are connected at once, which is zero after a restart anyway, and
+// persisting them would resurrect addresses nobody is using.
+message UserState {
+  Policy policy = 1;
+  uint64 uplink = 2;
+  uint64 downlink = 3;
+  repeated InboundUsage inbounds = 4;
+  repeated QuotaSpent quotas = 5;
+  int64 last_seen = 6;
+}
+
+// State is what the manager writes to disk.
+message State {
+  int64 version = 1;
+  int64 saved_at = 2;
+  Config config = 3;
+  map<string, UserState> users = 4;
+  uint64 server_used = 5;
+  int64 server_window_started = 6;
+  bool server_exceeded = 7;
+  bool server_warned = 8;
+  // The allowance actually in force, which a panel may have changed since the
+  // config was last written.
+  ServerQuota server_quota = 9;
+}
+
+// Config configures the tariff manager.
+message Config {
+  // Where the manager writes its state so that usage survives a restart. Empty
+  // disables persistence, which means a restart forgets how much of a monthly
+  // quota has been spent.
+  string state_path = 1;
+  // How often a dirty state is flushed, in seconds. Zero uses 10.
+  int64 flush_seconds = 2;
+  // Policy applied to a user with none of their own. Its email is ignored.
+  Policy default_policy = 3;
+  ServerQuota server_quota = 4;
+  // Rate an ACTION_THROTTLE falls back to when the quota does not name one, in
+  // bytes per second. Zero uses 131072 (1 Mbit/s).
+  uint64 default_throttle_bps = 5;
+}

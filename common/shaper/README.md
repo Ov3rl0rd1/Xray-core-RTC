@@ -227,8 +227,9 @@ goroutine and no shutdown.
 
 ## Plugging in a policy store
 
-The level table is a floor, not a ceiling. A store that knows about quotas,
-expiry dates and per-user plans installs itself with one call:
+The level table is a floor, not a ceiling. This fork ships such a store —
+[`app/tariff`](../../app/tariff/README.md), which adds quotas, expiry dates,
+device caps and a gRPC API — and it installs itself with one call:
 
 ```go
 dispatcher.SetLimitsResolver(func(u shaper.User) shaper.Limits {

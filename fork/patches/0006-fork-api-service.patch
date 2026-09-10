@@ -1,0 +1,12 @@
+diff --git a/infra/conf/api.go b/infra/conf/api.go
+index dca34910..8b2dfdeb 100644
+--- a/infra/conf/api.go
++++ b/infra/conf/api.go
+@@ -41,6 +41,7 @@ func (c *APIConfig) Build() (*commander.Config, error) {
+ 			services = append(services, serial.ToTypedMessage(&routerservice.Config{}))
+ 		}
+ 	}
++	services = append(services, forkAPIServices(c.Services)...)
+ 
+ 	return &commander.Config{
+ 		Tag:     c.Tag,

@@ -15,3 +15,4 @@
 0003-hysteria-pause-hooks       transport/internet/hysteria/conn.go transport/internet/hysteria/dialer.go
 0004-ci-asset-fallbacks         .github/workflows/release.yml .github/workflows/release-win7.yml .github/workflows/test.yml
 0005-gitignore                  .gitignore
+0006-fork-api-service          infra/conf/api.go

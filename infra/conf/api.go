@@ -41,6 +41,7 @@ func (c *APIConfig) Build() (*commander.Config, error) {
 			services = append(services, serial.ToTypedMessage(&routerservice.Config{}))
 		}
 	}
+	services = append(services, forkAPIServices(c.Services)...)
 
 	return &commander.Config{
 		Tag:     c.Tag,

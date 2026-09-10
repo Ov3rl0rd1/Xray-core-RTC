@@ -52,7 +52,7 @@ shown below.
 | Field | Type | Req. | Default | Notes |
 |-------|------|:----:|---------|-------|
 | `provider` | string | ✅ | — | `telemost`, `wbstream`, or `none`. See [Providers](#providers). |
-| `transport` | string | ✅ | — | `vp8channel`, `seichannel`, `videochannel`. See [Transports](#transports--speed). |
+| `transport` | string | ✅ | — | `vp8channel` or `seichannel`. See [Transports](#transports--speed). |
 | `roomId` | string | ✅¹ | — | Room reference for the provider. ¹Required unless `provider:"none"`. Telemost/WbStream: room ID created on the service site. |
 | `key` | string | ✅ | — | 64 hex chars (32‑byte shared key). `openssl rand -hex 32`. **Identical on both sides.** |
 | `dnsServer` | string | — | system | Resolver used to reach the SFU, e.g. `8.8.8.8:53`. |
@@ -82,7 +82,7 @@ shown below.
 | `fragmentSize` | int | `900` | Payload fragment size (bytes). |
 | `ackTimeoutMs` | int | `2000` | ACK timeout (ms) before retransmit. |
 
-### `video` object — videochannel tuning (needs `ffmpeg`)
+### `video` object — videochannel tuning (not accepted by this build)
 
 | Field | Type | Default | Notes |
 |-------|------|:-------:|-------|
@@ -136,11 +136,20 @@ told to reconnect). Use the same liveness/lifecycle values on both sides.
 
 `transport` decides how tunnel bytes are placed into a WebRTC primitive.
 
-| Transport | How it carries data | Needs |
-|-----------|---------------------|-------|
-| **`vp8channel`** | KCP over VP8‑like video frames | — |
-| **`seichannel`** | Payload in H.264 SEI NAL units, with ACK/retry | — |
-| **`videochannel`** | Bytes rendered as QR/tile frames via ffmpeg, with ACK/retry | `ffmpeg` (`tile` ⇒ 1080×1080) |
+| Transport | How it carries data | Accepted here |
+|-----------|---------------------|---------------|
+| **`vp8channel`** | KCP over VP8‑like video frames | ✅ |
+| **`seichannel`** | Payload in H.264 SEI NAL units, with ACK/retry | ✅ |
+| **`videochannel`** | Bytes rendered as QR/tile frames via ffmpeg, with ACK/retry | ✗ — needs `ffmpeg`, which the runtime image does not carry |
+| **`datachannel`** | A WebRTC data channel | ✗ — neither provider offers one |
+
+The last two are rejected by [`infra/conf/olcrtc.go`](../../infra/conf/olcrtc.go)
+when a config names them, so a broken carrier fails at startup with a clear
+message rather than somewhere inside a provider handshake. Their code is still
+compiled in: excluding it saves 1.3 MB of a 50 MB binary and would cost a
+rewrite of upstream's validation tests, which is a bad trade for a fork that has
+to resync. `supportedTransports` in that file is the one place to change if you
+want them back.
 
 ### Compatibility matrix
 

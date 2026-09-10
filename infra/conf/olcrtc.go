@@ -70,12 +70,38 @@ type OLCRTCClientConfig struct {
 	DeviceIDPath string `json:"deviceIdPath"`
 }
 
+// supportedTransports are the carriers this deployment will accept.
+//
+// The vendored library implements two more, and they are left compiled in
+// because excluding them saves 1.3 MB of a 50 MB binary and would cost a
+// rewrite of upstream's validation tests — a bad trade for a fork that has to
+// resync. What is worth having is this: neither of them can work here, and a
+// config that selects one should say so at startup rather than fail somewhere
+// inside a provider handshake.
+//
+//   - datachannel needs a WebRTC data channel, and neither provider offers
+//     one: wbstream issues guest tokens with canPublishData=false, telemost
+//     does not expose it at all.
+//   - videochannel renders bytes as QR or tile images through ffmpeg, which
+//     is not in the runtime image, and is upstream's slowest transport by its
+//     own measurements.
+//
+// Add a name here to allow it; nothing else needs to change.
+var supportedTransports = map[string]bool{
+	"vp8channel": true,
+	"seichannel": true,
+}
+
 func (c *olcrtcCommon) validate() error {
 	if c.Provider == "" {
 		return errors.New("olcrtc: provider is required (telemost, wbstream or none)")
 	}
 	if c.Transport == "" {
-		return errors.New("olcrtc: transport is required (vp8channel, seichannel or videochannel)")
+		return errors.New("olcrtc: transport is required (vp8channel or seichannel)")
+	}
+	if !supportedTransports[c.Transport] {
+		return errors.New("olcrtc: transport ", c.Transport,
+			" is not supported by this build (use vp8channel or seichannel)")
 	}
 	if c.Key == "" {
 		return errors.New("olcrtc: key is required (64 hex chars)")

@@ -24,7 +24,7 @@ versions we care about, and `go mod tidy` derives the rest.
 | Feature | Overlay | Touches upstream |
 |---|---|---|
 | **olcRTC** — TCP-over-WebRTC proxy | `proxy/olcrtc/**` (63 files), `proxy/selfdriven.go`, `app/proxyman/inbound/selfdriven.go`, `infra/conf/olcrtc.go`, `infra/conf/fork_registry.go`, `main/distro/all/fork.go` | 6 lines in `inbound.go`, 1 in `infra/conf/xray.go` |
-| **Per-user speed limit** | `app/dispatcher/ratelimit.go` | 4 lines in `app/dispatcher/default.go` |
+| **Per-user traffic shaping** | `common/shaper/**`, `app/dispatcher/ratelimit.go` | 5 lines in `app/dispatcher/default.go` |
 | **Pause/resume housekeeping** (battery, for the mobile client) | `common/pause/pause.go`, `transport/internet/hysteria/fork_pause.go` | 3 lines across `hysteria/conn.go` + `dialer.go` |
 | **libxray** — C ABI for the mobile client | `libxray/**`, `main/distro/lib/lib.go` | — |
 

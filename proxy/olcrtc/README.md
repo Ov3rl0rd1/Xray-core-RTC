@@ -230,48 +230,27 @@ handshakes for that identity.
 
 ## Speed limiting
 
-A per‑user **aggregate** bandwidth cap is enforced in the dispatcher
-([`app/dispatcher/ratelimit.go`](../../app/dispatcher/ratelimit.go)), keyed by
-**email**. Because that's the single point every connection crosses, it caps a
-user across **every protocol** (vless/hysteria/olcrtc) **and all of their
-devices** at once — one shared token bucket per (email, direction).
+Per-user traffic shaping is enforced in the dispatcher and therefore applies to
+olcrtc exactly as it does to VLESS and Hysteria — the same plan, aggregate
+across every protocol and all of a user's devices, keyed by **email**.
 
-Configure it in one place — `UserBytesPerSec(email, level)`:
+It is more than a cap: a fair split between the devices sharing a subscription,
+a speed boost that makes the first minute of a session feel unmetered, and a
+priority allowance that keeps DNS lookups and TLS handshakes responsive while a
+download is saturating the plan.
 
-```go
-func UserBytesPerSec(email string, level uint32) float64 {
-    return 10 * 1024 * 1024 // 10 MB/s. Return 0 for unlimited; switch on level for tiers.
-}
-```
+Plans are keyed by the user's **Xray level**, so an external panel selects one
+simply by creating the user at that level — no extra API, no restart.
 
-`10 MB/s` = `10 * 1024 * 1024` bytes/s = 80 Mbit/s. Upload and download get
-independent buckets (each capped at the value); share one key for a combined cap.
+See [`common/shaper/README.md`](../../common/shaper/README.md) for the tariff
+table, the tuning knobs, the cost, and how to replace the level table with a
+live policy store.
 
-### Impact on server CPU / memory
-
-The limiter is deliberately cheap:
-
-- **Memory:** one `rate.Limiter` per (email, direction) — 2 per limited user,
-  each on the order of tens of bytes. Even 10 000 users ≈ a few MB. The map is
-  not evicted, so it is bounded by the number of distinct emails seen (fine for
-  a VPN; restart or add eviction if you churn through millions of throwaway
-  identities).
-- **CPU (under the cap):** one mutex lock + a little float arithmetic per
-  `WriteMultiBuffer`. No timer, no sleep — negligible next to the AEAD
-  encryption and the copy itself.
-- **CPU (over the cap):** the writer goroutine is *parked* on a timer (no
-  busy‑wait); the effect is backpressure/latency, not CPU burn.
-- **Contention:** the global map lock is taken only when a user's limiter is
-  first created. Steady‑state writes contend only on that user's own limiter,
-  shared across their parallel streams — a non‑issue at 10 MB/s; only a single
-  user pushing very high aggregate throughput across many streams could feel it.
-
-**Bottom line:** negligible overhead for typical VPN workloads. Note the cap
-applies to **proxied payload** bytes (not TLS/WebRTC wire overhead), and the
-token bucket allows a burst of up to ~1 s (min 1 MiB) before settling to the
-steady rate.
-
----
+> **Note on device identity.** For socket inbounds a device is its source IP.
+> olcrtc traffic currently arrives with no per-device address of its own, so
+> all of a user's olcrtc connections count as one device and share one slot in
+> the fair split. Real per-device identity for olcrtc is a
+> [roadmap](#roadmap--planned-follow-ups) item, tied to per-user secrets.
 
 ## Connected users
 

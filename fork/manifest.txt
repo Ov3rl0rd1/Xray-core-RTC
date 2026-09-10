@@ -18,7 +18,8 @@ infra/conf/olcrtc.go
 infra/conf/fork_registry.go
 main/distro/all/fork.go
 
-# ── Per-user aggregate speed limiting (hooked from app/dispatcher) ──────────
+# ── Per-user traffic shaping (engine + the dispatcher hook that drives it) ──
+common/shaper/**
 app/dispatcher/ratelimit.go
 
 # ── Pause/resume for background housekeeping, for the embedded client ───────

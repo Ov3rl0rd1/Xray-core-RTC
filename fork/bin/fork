@@ -39,6 +39,11 @@ DEPS_FILE="$FORK_DIR/deps.txt"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 UPSTREAM_URL="https://github.com/XTLS/Xray-core.git"
 
+# Packages this fork owns code in, for `check` to vet and test. Upstream's own
+# vet findings are upstream's problem: failing on them would make this gate
+# useless the first time they land one, so it is deliberately not ./...
+FORK_PKGS="./proxy/olcrtc/... ./app/dispatcher/... ./common/shaper/... ./common/pause/... ./transport/internet/hysteria/..."
+
 # ── output ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
     B=$'\033[1m'; R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
@@ -184,11 +189,13 @@ cmd_check() {
         info "vetting the fork's own packages"
         # Only ours: upstream vet findings are upstream's problem, and failing on
         # them would make this gate useless the first time they land one.
-        if (cd "$work" && go vet ./proxy/olcrtc ./app/dispatcher ./common/pause ./transport/internet/hysteria 2>&1 | grep -v '^#' | grep -q .); then
+        if (cd "$work" && go vet $FORK_PKGS 2>&1 | grep -v '^#' | grep -q .); then
             warn "go vet reported findings"
         else
             ok "vet clean"
         fi
+        info "testing the fork's own packages"
+        if (cd "$work" && go test -count=1 $FORK_PKGS); then ok "tests pass"; else warn "tests FAILED"; rc=1; fi
     else
         warn "go not installed — skipped build/vet"
     fi

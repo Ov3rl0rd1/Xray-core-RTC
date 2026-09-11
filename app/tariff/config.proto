@@ -182,6 +182,12 @@ enum EventKind {
   EVENT_POLICY_CHANGED = 12;
   EVENT_POLICY_REMOVED = 13;
   EVENT_USER_EXPIRED = 14;
+  // Carrier rooms, reported by the olcRTC inbound. A panel watches these to
+  // know when a node's room has stopped working and its subscriptions need
+  // reissuing against another one.
+  EVENT_ROOM_UP = 15;
+  EVENT_ROOM_DOWN = 16;
+  EVENT_ROOM_SWITCHED = 17;
 }
 
 // Event is one such change.
@@ -195,6 +201,11 @@ message Event {
   uint64 value = 6;
   uint64 limit = 7;
   string detail = 8;
+  // Which room the event is about, for the EVENT_ROOM_* kinds.
+  string room = 9;
+  // Which inbound reported it, so a node running several olcRTC inbounds is
+  // still legible.
+  string tag = 10;
 }
 
 // QuotaSpent is one quota's terms plus what has been spent against them,

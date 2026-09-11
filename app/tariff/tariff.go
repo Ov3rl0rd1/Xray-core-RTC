@@ -126,6 +126,7 @@ func Default() *Manager {
 			errors.LogWarningInner(nil, err, "tariff: could not load state")
 		}
 		defaultMgr.Install()
+		installed.Store(defaultMgr)
 	})
 	return defaultMgr
 }
@@ -439,3 +440,30 @@ func (m *Manager) markDirty() {
 		m.dirty.Store(true)
 	}
 }
+
+// --- events from elsewhere in the process ----------------------------------
+
+// PublishRoom reports a carrier room's state to whoever is watching the event
+// stream. The olcRTC inbound calls it; a panel uses it to know when a node's
+// room has stopped working and its subscriptions need reissuing.
+//
+// It does nothing when no manager exists, which is the case on a server that
+// does not list TariffService: reporting must not be the thing that creates a
+// policy store nobody asked for.
+func PublishRoom(kind EventKind, tag, room, detail string) {
+	m := installed.Load()
+	if m == nil {
+		return
+	}
+	m.events.publish(&Event{
+		UnixNano: m.now().UnixNano(),
+		Kind:     kind,
+		Tag:      tag,
+		Room:     room,
+		Detail:   detail,
+	})
+}
+
+// installed points at the manager once one exists, so callers elsewhere in the
+// process can report to it without forcing one into being.
+var installed atomic.Pointer[Manager]

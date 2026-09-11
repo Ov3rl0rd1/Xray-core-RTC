@@ -157,6 +157,12 @@ const (
 	EventKind_EVENT_POLICY_CHANGED        EventKind = 12
 	EventKind_EVENT_POLICY_REMOVED        EventKind = 13
 	EventKind_EVENT_USER_EXPIRED          EventKind = 14
+	// Carrier rooms, reported by the olcRTC inbound. A panel watches these to
+	// know when a node's room has stopped working and its subscriptions need
+	// reissuing against another one.
+	EventKind_EVENT_ROOM_UP       EventKind = 15
+	EventKind_EVENT_ROOM_DOWN     EventKind = 16
+	EventKind_EVENT_ROOM_SWITCHED EventKind = 17
 )
 
 // Enum value maps for EventKind.
@@ -177,6 +183,9 @@ var (
 		12: "EVENT_POLICY_CHANGED",
 		13: "EVENT_POLICY_REMOVED",
 		14: "EVENT_USER_EXPIRED",
+		15: "EVENT_ROOM_UP",
+		16: "EVENT_ROOM_DOWN",
+		17: "EVENT_ROOM_SWITCHED",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_UNKNOWN":               0,
@@ -194,6 +203,9 @@ var (
 		"EVENT_POLICY_CHANGED":        12,
 		"EVENT_POLICY_REMOVED":        13,
 		"EVENT_USER_EXPIRED":          14,
+		"EVENT_ROOM_UP":               15,
+		"EVENT_ROOM_DOWN":             16,
+		"EVENT_ROOM_SWITCHED":         17,
 	}
 )
 
@@ -926,9 +938,14 @@ type Event struct {
 	InboundTag string                 `protobuf:"bytes,4,opt,name=inbound_tag,json=inboundTag,proto3" json:"inbound_tag,omitempty"`
 	Device     string                 `protobuf:"bytes,5,opt,name=device,proto3" json:"device,omitempty"`
 	// Bytes for quota events, a count for device events, zero otherwise.
-	Value         uint64 `protobuf:"varint,6,opt,name=value,proto3" json:"value,omitempty"`
-	Limit         uint64 `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"`
-	Detail        string `protobuf:"bytes,8,opt,name=detail,proto3" json:"detail,omitempty"`
+	Value  uint64 `protobuf:"varint,6,opt,name=value,proto3" json:"value,omitempty"`
+	Limit  uint64 `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"`
+	Detail string `protobuf:"bytes,8,opt,name=detail,proto3" json:"detail,omitempty"`
+	// Which room the event is about, for the EVENT_ROOM_* kinds.
+	Room string `protobuf:"bytes,9,opt,name=room,proto3" json:"room,omitempty"`
+	// Which inbound reported it, so a node running several olcRTC inbounds is
+	// still legible.
+	Tag           string `protobuf:"bytes,10,opt,name=tag,proto3" json:"tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1015,6 +1032,20 @@ func (x *Event) GetLimit() uint64 {
 func (x *Event) GetDetail() string {
 	if x != nil {
 		return x.Detail
+	}
+	return ""
+}
+
+func (x *Event) GetRoom() string {
+	if x != nil {
+		return x.Room
+	}
+	return ""
+}
+
+func (x *Event) GetTag() string {
+	if x != nil {
+		return x.Tag
 	}
 	return ""
 }
@@ -1460,7 +1491,7 @@ const file_app_tariff_config_proto_rawDesc = "" +
 	"\x16effective_downlink_bps\x18\t \x01(\x04R\x14effectiveDownlinkBps\x12\x18\n" +
 	"\ablocked\x18\n" +
 	" \x01(\bR\ablocked\x12%\n" +
-	"\x0eblocked_reason\x18\v \x01(\tR\rblockedReason\"\xe7\x01\n" +
+	"\x0eblocked_reason\x18\v \x01(\tR\rblockedReason\"\x8d\x02\n" +
 	"\x05Event\x12\x1b\n" +
 	"\tunix_nano\x18\x01 \x01(\x03R\bunixNano\x12.\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1a.xray.app.tariff.EventKindR\x04kind\x12\x14\n" +
@@ -1470,7 +1501,10 @@ const file_app_tariff_config_proto_rawDesc = "" +
 	"\x06device\x18\x05 \x01(\tR\x06device\x12\x14\n" +
 	"\x05value\x18\x06 \x01(\x04R\x05value\x12\x14\n" +
 	"\x05limit\x18\a \x01(\x04R\x05limit\x12\x16\n" +
-	"\x06detail\x18\b \x01(\tR\x06detail\"\xa7\x01\n" +
+	"\x06detail\x18\b \x01(\tR\x06detail\x12\x12\n" +
+	"\x04room\x18\t \x01(\tR\x04room\x12\x10\n" +
+	"\x03tag\x18\n" +
+	" \x01(\tR\x03tag\"\xa7\x01\n" +
 	"\n" +
 	"QuotaSpent\x12*\n" +
 	"\x04spec\x18\x01 \x01(\v2\x16.xray.app.tariff.QuotaR\x04spec\x12\x12\n" +
@@ -1516,7 +1550,7 @@ const file_app_tariff_config_proto_rawDesc = "" +
 	"\x06Action\x12\x11\n" +
 	"\rACTION_NOTIFY\x10\x00\x12\x13\n" +
 	"\x0fACTION_THROTTLE\x10\x01\x12\x10\n" +
-	"\fACTION_BLOCK\x10\x02*\x98\x03\n" +
+	"\fACTION_BLOCK\x10\x02*\xd9\x03\n" +
 	"\tEventKind\x12\x11\n" +
 	"\rEVENT_UNKNOWN\x10\x00\x12\x18\n" +
 	"\x14EVENT_USER_CONNECTED\x10\x01\x12\x1b\n" +
@@ -1533,7 +1567,10 @@ const file_app_tariff_config_proto_rawDesc = "" +
 	"\x18EVENT_SERVER_QUOTA_RESET\x10\v\x12\x18\n" +
 	"\x14EVENT_POLICY_CHANGED\x10\f\x12\x18\n" +
 	"\x14EVENT_POLICY_REMOVED\x10\r\x12\x16\n" +
-	"\x12EVENT_USER_EXPIRED\x10\x0eBO\n" +
+	"\x12EVENT_USER_EXPIRED\x10\x0e\x12\x11\n" +
+	"\rEVENT_ROOM_UP\x10\x0f\x12\x13\n" +
+	"\x0fEVENT_ROOM_DOWN\x10\x10\x12\x17\n" +
+	"\x13EVENT_ROOM_SWITCHED\x10\x11BO\n" +
 	"\x13com.xray.app.tariffP\x01Z$github.com/xtls/xray-core/app/tariff\xaa\x02\x0fXray.App.Tariffb\x06proto3"
 
 var (

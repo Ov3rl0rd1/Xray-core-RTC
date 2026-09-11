@@ -63,6 +63,16 @@ message ClientConfig {
   string device_id = 30;
   string device_id_path = 31;
   string uuid = 32;
+
+  // Rooms to fall back to, in order, when room_id stops working. A provider
+  // retires a room, a token stops being issued for it, or it is blocked, and
+  // without somewhere else to go the tunnel simply ends. Each is tried in
+  // turn; a room that failed is put on a cooldown that lengthens with
+  // successive failures, and the primary is retried once its own lapses.
+  repeated string fallback_rooms = 33;
+  // How long a room sits out after its first failure, as a Go duration. Each
+  // further failure doubles it, up to sixteen times this. Empty uses 30s.
+  string room_cooldown = 34;
 }
 
 // ServerConfig configures an olcrtc inbound (the tunnel server). It joins the
@@ -105,4 +115,14 @@ message ServerConfig {
   string liveness_timeout = 27;
   int32 liveness_failures = 28;
   string max_session_duration = 29;
+
+  // Rooms to fall back to, in order, when room_id stops working. A provider
+  // retires a room, a token stops being issued for it, or it is blocked, and
+  // without somewhere else to go the tunnel simply ends. Each is tried in
+  // turn; a room that failed is put on a cooldown that lengthens with
+  // successive failures, and the primary is retried once its own lapses.
+  repeated string fallback_rooms = 33;
+  // How long a room sits out after its first failure, as a Go duration. Each
+  // further failure doubles it, up to sixteen times this. Empty uses 30s.
+  string room_cooldown = 34;
 }

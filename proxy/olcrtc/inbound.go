@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/xtls/xray-core/app/dispatcher"
+	"github.com/xtls/xray-core/app/tariff"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -33,12 +36,26 @@ type Server struct {
 	tag        string
 	dispatcher routing.Dispatcher
 	validator  *Validator
+
+	// rooms decides which carrier room each run uses; see rooms.go.
+	rooms *roomPool
+	// roomUp is whether the current run has seen a client, so a room is
+	// reported up once rather than on every connection.
+	roomUp atomic.Bool
 }
 
 // NewServer creates an olcrtc inbound handler from config. It captures the
 // inbound tag from ctx (set by the handler manager) and resolves the router.
 func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
-	s := &Server{config: config, validator: NewValidator()}
+	cooldown, err := optionalDuration(config.GetRoomCooldown(), "roomCooldown")
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{
+		config:    config,
+		validator: NewValidator(),
+		rooms:     newRoomPool(config.GetRoomId(), config.GetFallbackRooms(), cooldown),
+	}
 	if inbound := session.InboundFromContext(ctx); inbound != nil {
 		s.tag = inbound.Tag
 	}
@@ -50,6 +67,10 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 	}
 	return s, nil
 }
+
+// Rooms reports what the inbound has learned about its carrier rooms, for
+// diagnostics.
+func (s *Server) Rooms() []roomState { return s.rooms.snapshot() }
 
 // Serve brings up the server carrier and blocks until ctx is cancelled. Each
 // accepted tunnel stream is authenticated by authHook and its target dispatched
@@ -76,13 +97,65 @@ func (s *Server) Serve(ctx context.Context) error {
 		defer cancel()
 	}
 
+	// Which room this attempt uses. The handler calls Serve again when it
+	// returns, so working down the list is a matter of answering differently
+	// each time rather than looping here.
+	room, switched := s.rooms.next()
+	if room != "" {
+		cfg.RoomURL = room
+	}
+	if switched {
+		errors.LogWarning(ctx, "olcrtc: switching to room ", room)
+		tariff.PublishRoom(tariff.EventKind_EVENT_ROOM_SWITCHED, s.tag, room, "")
+	}
+
+	// A session opening means the room carried a client end to end, which is
+	// the only evidence that actually settles whether a room works.
+	cfg.OnSessionOpen = func(string, string, map[string]any) { s.roomWorked(ctx, room) }
+
 	dial := func(dctx context.Context, addr string, port int, sessionID string) (net.Conn, error) {
 		return s.dispatch(dctx, addr, port, sessionID)
 	}
-	if err := oltunnel.NewWithDial(cfg, dial).Run(ctx); err != nil {
-		return errors.New("olcrtc inbound ended").Base(err)
+
+	started := time.Now()
+	runErr := oltunnel.NewWithDial(cfg, dial).Run(ctx)
+	s.roomEnded(ctx, room, time.Since(started), runErr)
+	if runErr != nil {
+		return errors.New("olcrtc inbound ended").Base(runErr)
 	}
 	return nil
+}
+
+// roomWorked records, once per run, that this room carried a client.
+func (s *Server) roomWorked(ctx context.Context, room string) {
+	if room == "" || !s.roomUp.CompareAndSwap(false, true) {
+		return
+	}
+	s.rooms.succeeded(room)
+	errors.LogInfo(ctx, "olcrtc: room ", room, " is carrying clients")
+	tariff.PublishRoom(tariff.EventKind_EVENT_ROOM_UP, s.tag, room, "")
+}
+
+// roomEnded records how a run finished, which is what decides whether the next
+// one uses the same room.
+//
+// Cancellation is not the room's fault: a planned rebuild or a shutdown says
+// nothing about whether the room works, and counting it would rotate away from
+// a perfectly good one every maxSessionDuration.
+func (s *Server) roomEnded(ctx context.Context, room string, ranFor time.Duration, err error) {
+	wasUp := s.roomUp.Swap(false)
+	if room == "" || ctx.Err() != nil {
+		return
+	}
+	s.rooms.failed(room, ranFor, err)
+	if !wasUp {
+		detail := "carrier did not hold"
+		if err != nil {
+			detail = err.Error()
+		}
+		errors.LogWarning(ctx, "olcrtc: room ", room, " failed after ", ranFor.Round(time.Second), ": ", detail)
+		tariff.PublishRoom(tariff.EventKind_EVENT_ROOM_DOWN, s.tag, room, detail)
+	}
 }
 
 // authHook authorises a client handshake.

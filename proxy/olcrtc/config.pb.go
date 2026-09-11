@@ -70,9 +70,18 @@ type ClientConfig struct {
 	// Both travel inside the encrypted session rather than in the opening
 	// frame, so neither is recoverable from recorded traffic even by someone
 	// who later obtains the server's private key.
-	DeviceId      string `protobuf:"bytes,30,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	DeviceIdPath  string `protobuf:"bytes,31,opt,name=device_id_path,json=deviceIdPath,proto3" json:"device_id_path,omitempty"`
-	Uuid          string `protobuf:"bytes,32,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	DeviceId     string `protobuf:"bytes,30,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	DeviceIdPath string `protobuf:"bytes,31,opt,name=device_id_path,json=deviceIdPath,proto3" json:"device_id_path,omitempty"`
+	Uuid         string `protobuf:"bytes,32,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	// Rooms to fall back to, in order, when room_id stops working. A provider
+	// retires a room, a token stops being issued for it, or it is blocked, and
+	// without somewhere else to go the tunnel simply ends. Each is tried in
+	// turn; a room that failed is put on a cooldown that lengthens with
+	// successive failures, and the primary is retried once its own lapses.
+	FallbackRooms []string `protobuf:"bytes,33,rep,name=fallback_rooms,json=fallbackRooms,proto3" json:"fallback_rooms,omitempty"`
+	// How long a room sits out after its first failure, as a Go duration. Each
+	// further failure doubles it, up to sixteen times this. Empty uses 30s.
+	RoomCooldown  string `protobuf:"bytes,34,opt,name=room_cooldown,json=roomCooldown,proto3" json:"room_cooldown,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -331,6 +340,20 @@ func (x *ClientConfig) GetUuid() string {
 	return ""
 }
 
+func (x *ClientConfig) GetFallbackRooms() []string {
+	if x != nil {
+		return x.FallbackRooms
+	}
+	return nil
+}
+
+func (x *ClientConfig) GetRoomCooldown() string {
+	if x != nil {
+		return x.RoomCooldown
+	}
+	return ""
+}
+
 // ServerConfig configures an olcrtc inbound (the tunnel server). It joins the
 // same room, accepts tunnel streams and dispatches their targets through Xray's
 // router. It shares ClientConfig's field shape; device fields are ignored.
@@ -367,8 +390,17 @@ type ServerConfig struct {
 	LivenessTimeout    string `protobuf:"bytes,27,opt,name=liveness_timeout,json=livenessTimeout,proto3" json:"liveness_timeout,omitempty"`
 	LivenessFailures   int32  `protobuf:"varint,28,opt,name=liveness_failures,json=livenessFailures,proto3" json:"liveness_failures,omitempty"`
 	MaxSessionDuration string `protobuf:"bytes,29,opt,name=max_session_duration,json=maxSessionDuration,proto3" json:"max_session_duration,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Rooms to fall back to, in order, when room_id stops working. A provider
+	// retires a room, a token stops being issued for it, or it is blocked, and
+	// without somewhere else to go the tunnel simply ends. Each is tried in
+	// turn; a room that failed is put on a cooldown that lengthens with
+	// successive failures, and the primary is retried once its own lapses.
+	FallbackRooms []string `protobuf:"bytes,33,rep,name=fallback_rooms,json=fallbackRooms,proto3" json:"fallback_rooms,omitempty"`
+	// How long a room sits out after its first failure, as a Go duration. Each
+	// further failure doubles it, up to sixteen times this. Empty uses 30s.
+	RoomCooldown  string `protobuf:"bytes,34,opt,name=room_cooldown,json=roomCooldown,proto3" json:"room_cooldown,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServerConfig) Reset() {
@@ -604,11 +636,25 @@ func (x *ServerConfig) GetMaxSessionDuration() string {
 	return ""
 }
 
+func (x *ServerConfig) GetFallbackRooms() []string {
+	if x != nil {
+		return x.FallbackRooms
+	}
+	return nil
+}
+
+func (x *ServerConfig) GetRoomCooldown() string {
+	if x != nil {
+		return x.RoomCooldown
+	}
+	return ""
+}
+
 var File_proxy_olcrtc_config_proto protoreflect.FileDescriptor
 
 const file_proxy_olcrtc_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19proxy/olcrtc/config.proto\x12\x11xray.proxy.olcrtc\"\xc5\b\n" +
+	"\x19proxy/olcrtc/config.proto\x12\x11xray.proxy.olcrtc\"\x91\t\n" +
 	"\fClientConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1c\n" +
 	"\ttransport\x18\x02 \x01(\tR\ttransport\x12\x17\n" +
@@ -647,7 +693,9 @@ const file_proxy_olcrtc_config_proto_rawDesc = "" +
 	"\x14max_session_duration\x18\x1d \x01(\tR\x12maxSessionDuration\x12\x1b\n" +
 	"\tdevice_id\x18\x1e \x01(\tR\bdeviceId\x12$\n" +
 	"\x0edevice_id_path\x18\x1f \x01(\tR\fdeviceIdPath\x12\x12\n" +
-	"\x04uuid\x18  \x01(\tR\x04uuid\"\xf0\a\n" +
+	"\x04uuid\x18  \x01(\tR\x04uuid\x12%\n" +
+	"\x0efallback_rooms\x18! \x03(\tR\rfallbackRooms\x12#\n" +
+	"\rroom_cooldown\x18\" \x01(\tR\froomCooldown\"\xbc\b\n" +
 	"\fServerConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1c\n" +
 	"\ttransport\x18\x02 \x01(\tR\ttransport\x12\x17\n" +
@@ -683,7 +731,9 @@ const file_proxy_olcrtc_config_proto_rawDesc = "" +
 	"\x11liveness_interval\x18\x1a \x01(\tR\x10livenessInterval\x12)\n" +
 	"\x10liveness_timeout\x18\x1b \x01(\tR\x0flivenessTimeout\x12+\n" +
 	"\x11liveness_failures\x18\x1c \x01(\x05R\x10livenessFailures\x120\n" +
-	"\x14max_session_duration\x18\x1d \x01(\tR\x12maxSessionDurationBU\n" +
+	"\x14max_session_duration\x18\x1d \x01(\tR\x12maxSessionDuration\x12%\n" +
+	"\x0efallback_rooms\x18! \x03(\tR\rfallbackRooms\x12#\n" +
+	"\rroom_cooldown\x18\" \x01(\tR\froomCooldownBU\n" +
 	"\x15com.xray.proxy.olcrtcP\x01Z&github.com/xtls/xray-core/proxy/olcrtc\xaa\x02\x11Xray.Proxy.Olcrtcb\x06proto3"
 
 var (

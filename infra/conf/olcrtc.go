@@ -43,6 +43,15 @@ type olcrtcCommon struct {
 	DNSServer string `json:"dnsServer"`
 	AuthToken string `json:"authToken"`
 
+	// FallbackRooms are tried, in order, when roomId stops working — a
+	// provider retiring it, a token no longer being issued, a block. Without
+	// somewhere else to go, any of those ends the tunnel.
+	FallbackRooms []string `json:"fallbackRooms"`
+	// RoomCooldown is how long a room sits out after its first failure, as a
+	// Go duration. Each further failure doubles it, up to sixteen times this.
+	// Empty uses 30s.
+	RoomCooldown string `json:"roomCooldown"`
+
 	Engine string `json:"engine"`
 	URL    string `json:"url"`
 	Token  string `json:"token"`
@@ -176,6 +185,8 @@ func (c *OLCRTCServerConfig) Build() (proto.Message, error) {
 		VideoCodec:         v.Codec,
 		VideoTileModule:    v.TileModule,
 		VideoTileRs:        v.TileRS,
+		FallbackRooms:      c.FallbackRooms,
+		RoomCooldown:       c.RoomCooldown,
 		LivenessInterval:   c.LivenessInterval,
 		LivenessTimeout:    c.LivenessTimeout,
 		LivenessFailures:   c.LivenessFailures,
@@ -220,6 +231,8 @@ func (c *OLCRTCClientConfig) Build() (proto.Message, error) {
 		VideoCodec:         v.Codec,
 		VideoTileModule:    v.TileModule,
 		VideoTileRs:        v.TileRS,
+		FallbackRooms:      c.FallbackRooms,
+		RoomCooldown:       c.RoomCooldown,
 		LivenessInterval:   c.LivenessInterval,
 		LivenessTimeout:    c.LivenessTimeout,
 		LivenessFailures:   c.LivenessFailures,

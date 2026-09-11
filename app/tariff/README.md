@@ -174,9 +174,9 @@ retrying cannot ratchet the cap down. Slots are freed when a device's last
 connection closes; devices are remembered for five minutes after that so a
 client reconnecting every few seconds does not produce an event storm.
 
-> olcRTC connections currently arrive with no per-device address, so all of a
-> user's olcRTC traffic counts as one device. Real per-device identity for it is
-> tied to the per-user secrets work.
+> olcRTC is the exception, and the better case: its handshake carries a real
+> device identifier, so its connections are told apart properly instead of
+> being inferred from an address they do not have.
 
 ---
 
@@ -234,6 +234,7 @@ them.
 | `SERVER_QUOTA_*` | The same for the host allowance. |
 | `POLICY_CHANGED` / `POLICY_REMOVED` | The panel's own pushes, echoed back. |
 | `USER_EXPIRED` | `expires_at` passed. |
+| `ROOM_UP` / `ROOM_DOWN` / `ROOM_SWITCHED` | An olcRTC carrier room started working, stopped, or was rotated away from. Carries `room` and `tag`; see [olcRTC's room failover](../../proxy/olcrtc/README.md#room-failover). |
 
 **A stream that stops being read loses events rather than stalling the server.**
 Letting a wedged gRPC stream apply back-pressure to the data plane would turn a

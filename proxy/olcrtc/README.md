@@ -20,7 +20,8 @@ app ─▶ Xray (socks/vless/…) ─▶ olcrtc outbound  ══WebRTC/SFU══
 
 **Contents:** [Roles](#roles) · [Settings reference](#settings-reference) ·
 [Providers](#providers) · [Transports & speed](#transports--speed) ·
-[Keys & identity](#keys--identity) · [Speed limiting](#speed-limiting) ·
+[Keys & identity](#keys--identity) · [Room failover](#room-failover) ·
+[Speed limiting](#speed-limiting) ·
 [Connected users](#connected-users) · [Example configs](#example-configs) ·
 [Embedded usage](#embedded-usage) · [Roadmap](#roadmap--planned-follow-ups) ·
 [Caveats](#caveats).
@@ -59,6 +60,8 @@ shown below.
 | `provider` | string | ✅ | — | `telemost`, `wbstream`, or `none`. See [Providers](#providers). |
 | `transport` | string | ✅ | — | `vp8channel` or `seichannel`. See [Transports](#transports--speed). |
 | `roomId` | string | ✅¹ | — | Room reference for the provider. ¹Required unless `provider:"none"`. Telemost/WbStream: room ID created on the service site. |
+| `fallbackRooms` | []string | — | — | Rooms to fall back to, in order. See [Room failover](#room-failover). |
+| `roomCooldown` | string | — | `30s` | How long a failed room sits out before it is tried again. |
 | `privateKey` | string | ✅ (inbound) | — | The server's X25519 private key, from `xray x25519`. |
 | `publicKey` | string | ✅ (outbound) | — | The server's X25519 public key. Not a secret. |
 | `dnsServer` | string | — | system | Resolver used to reach the SFU, e.g. `8.8.8.8:53`. |
@@ -196,6 +199,53 @@ most CPU‑hungry because of ffmpeg and is best treated as a fallback.
 
 ---
 
+## Room failover
+
+The tunnel lives inside somebody else's conference room, and rooms stop working
+for reasons that have nothing to do with this server: a provider retires one,
+stops issuing tokens for it, or it gets blocked. With one room configured, any
+of those ends the tunnel until a human notices.
+
+Give it a list and it works down them:
+
+```json
+"roomId": "primary-room",
+"fallbackRooms": ["backup-one", "backup-two"],
+"roomCooldown": "30s"
+```
+
+Both sides take the same two fields — a server whose room is gone and a client
+that cannot reach it are the same problem seen from opposite ends.
+
+**How a room is judged.** The only evidence that settles whether a room works
+is a client completing a handshake through it, so that is what counts as
+success. A run that ends without one counts as a failure and puts the room on a
+cooldown that doubles with each successive failure, up to sixteen times the
+base. Two things deliberately do *not* count against a room:
+
+- a run that stayed up longer than two minutes — the carrier worked and
+  something else ended it, and penalising the room for that would rotate away
+  from a room that is fine;
+- a cancelled run — a planned `maxSessionDuration` rebuild or a shutdown says
+  nothing about the room, and counting it would rotate on every rebuild.
+
+**Selection always restarts from the top of the list.** The fallbacks are there
+to keep the service up, not to become the new normal, so the primary reclaims
+its place the moment its cooldown lapses. When every room is resting the pool
+still hands back the one that frees up soonest rather than refusing to run —
+a tunnel that stops trying is worse than one that retries too eagerly.
+
+**What the panel sees.** The inbound reports `ROOM_UP`, `ROOM_DOWN` and
+`ROOM_SWITCHED` on the same event stream as everything else
+([`app/tariff`](../../app/tariff/README.md)), each carrying the room and the
+inbound's tag, so a node running several olcRTC inbounds stays legible. That is
+the signal to reissue subscriptions against a room that still works.
+
+> Failover is a policy over rooms you supply; it does not discover new ones.
+> Creating rooms and handing them to a node is the panel's job.
+
+---
+
 ## Keys & identity
 
 ### Why the shared key had to go
@@ -304,11 +354,11 @@ See [`common/shaper/README.md`](../../common/shaper/README.md) for the tariff
 table, the tuning knobs, the cost, and how to replace the level table with a
 live policy store.
 
-> **Note on device identity.** For socket inbounds a device is its source IP.
-> olcrtc traffic currently arrives with no per-device address of its own, so
-> all of a user's olcrtc connections count as one device and share one slot in
-> the fair split. Real per-device identity for olcrtc is a
-> [roadmap](#roadmap--planned-follow-ups) item, tied to per-user secrets.
+> **Note on device identity.** For socket inbounds a device is its source IP,
+> which is all a stock client offers. olcRTC does better: the handshake carries
+> a real `deviceId`, and the inbound passes it to the dispatcher, so a
+> subscription used from several machines is split and capped per machine
+> rather than collapsing into one. See [Keys & identity](#keys--identity).
 
 ## Connected users
 
@@ -485,12 +535,13 @@ per‑device counting, and a key that is negotiated rather than shared. See
 
 What is left:
 
-- **Room health and failover.** The inbound joins one room and stays there. A
-  room that is blocked or that the provider retires takes the tunnel with it.
-  Wanted: a pool of rooms, a prober that tells `healthy` from `degraded` from
-  `blocked` (provider API answers but no media flows — the shape a DPI block
-  takes), hot standbys, and the status pushed to the panel so it can reissue
-  subscriptions.
+- **Hot standbys.** Failover is sequential: a room is tried, and if it does not
+  work the next one is. Keeping a second carrier warm would cut the gap to
+  nothing, at the cost of holding two conference sessions per node.
+- **Telling a block from an outage.** A room that fails is a room that fails;
+  nothing here distinguishes "the provider retired it" from "a DPI dropped the
+  media". The distinction needs a probe from a second vantage point, which is
+  the panel's to run, not a node's.
 - **Several users per room in practice.** The cryptography no longer stands in
   the way, and per‑peer routing exists on `vp8channel`. What has not been
   measured is how many peers one room carries before the SFU itself becomes the

@@ -30,6 +30,10 @@ type Client struct {
 	startedAt time.Time
 	// maxSession, when set, retires the carrier once it is this old.
 	maxSession time.Duration
+	// rooms works down the configured rooms when one stops working; see
+	// rooms.go. A client that can only reach one room is offline the moment
+	// that room is retired or blocked.
+	rooms *roomPool
 }
 
 // NewClient creates an olcrtc outbound handler from config.
@@ -38,7 +42,15 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Client{config: config, maxSession: maxSession}
+	cooldown, err := optionalDuration(config.GetRoomCooldown(), "roomCooldown")
+	if err != nil {
+		return nil, err
+	}
+	h := &Client{
+		config:     config,
+		maxSession: maxSession,
+		rooms:      newRoomPool(config.GetRoomId(), config.GetFallbackRooms(), cooldown),
+	}
 	if err := core.RequireFeatures(ctx, func(pm policy.Manager) error {
 		h.policyManager = pm
 		return nil
@@ -77,13 +89,57 @@ func (h *Client) ensureClient() (*olclient.Tunnel, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// One attempt per call, not a loop: the caller is a connection that is
+	// already waiting, and the next connection tries the next room. Blocking
+	// one dial through every room in turn would turn a dead primary into a
+	// minutes-long stall instead of a fast failure and a quick retry.
+	room, switched := h.rooms.next()
+	if room != "" {
+		cfg.RoomURL = room
+	}
+	if switched {
+		errors.LogWarning(context.Background(), "olcrtc: switching to room ", room)
+	}
+
+	started := time.Now()
 	c, err := olclient.StartTunnel(context.Background(), cfg)
 	if err != nil {
+		h.rooms.failed(room, time.Since(started), err)
 		return nil, err
 	}
+	h.rooms.succeeded(room)
 	h.client = c
 	h.startedAt = time.Now()
 	return c, nil
+}
+
+// dropCarrier retires the current carrier so the next connection builds a new
+// one, against whichever room the pool offers next.
+//
+// Called when a dial over an established carrier fails: the carrier looked
+// alive but did not work, which is exactly the shape a room being blocked
+// takes from this side. Without it the outbound would keep handing every
+// connection to the same dead carrier.
+func (h *Client) dropCarrier(reason error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.client == nil {
+		return
+	}
+	h.rooms.failed(h.currentRoom(), time.Since(h.startedAt), reason)
+	_ = h.client.Close()
+	h.client = nil
+}
+
+// currentRoom reports the room the live carrier was built against.
+func (h *Client) currentRoom() string {
+	for _, r := range h.rooms.snapshot() {
+		if r.up {
+			return r.id
+		}
+	}
+	return ""
 }
 
 // Process implements proxy.Outbound. It dials the target over the carrier and
@@ -108,6 +164,9 @@ func (h *Client) Process(ctx context.Context, link *transport.Link, _ internet.D
 	errors.LogInfo(ctx, "olcrtc: dialing tunnel to ", dest)
 	conn, err := c.DialContext(ctx, dest.Address.String(), int(dest.Port))
 	if err != nil {
+		// The carrier is up but cannot carry anything. Retire it so the next
+		// connection rebuilds, possibly against another room.
+		h.dropCarrier(err)
 		return errors.New("olcrtc: failed to dial ", dest).Base(err)
 	}
 	defer conn.Close()

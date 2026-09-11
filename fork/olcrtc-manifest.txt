@@ -46,7 +46,18 @@
 = pkg/olcrtc/client/fork_dial.go
 = pkg/olcrtc/tunnel/fork_dial.go
 
+# keyexchange: the whole package is ours. It replaces the shared room key with
+# a per-connection key negotiated against the server's public key, which is
+# also what stops several users in one room reading each other's traffic.
+# A directory works here exactly as a file does.
+= internal/keyexchange
+
 # fork_egress.go: hand a tunnelled target to Xray's router instead of exiting
 # to the internet from here. This one does need three lines inside upstream's
 # server, which is what olcrtc-patches holds.
 = internal/server/fork_egress.go
+
+# fork_keys.go: choose between upstream's pre-shared secret and the negotiated
+# per-peer keys, and hand a peer its own key set. Two files, one per side.
+= internal/server/fork_keys.go
+= internal/client/fork_keys.go

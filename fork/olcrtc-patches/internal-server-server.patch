@@ -1,6 +1,42 @@
 --- a/internal/server/server.go
 +++ b/internal/server/server.go
-@@ -69,6 +69,7 @@
+@@ -4,7 +4,6 @@
+ import (
+ 	"context"
+ 	"errors"
+-	"fmt"
+ 	"net"
+ 	"sync"
+ 	"sync/atomic"
+@@ -12,7 +11,6 @@
+ 	"github.com/xtaci/smux"
+ 
+ 	"github.com/openlibrecommunity/olcrtc/internal/control"
+-	"github.com/openlibrecommunity/olcrtc/internal/crypto"
+ 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
+ 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
+ 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
+@@ -44,12 +42,13 @@
+ 
+ // Server handles incoming tunnel connections and proxies their traffic.
+ type Server struct {
+-	baseCtx context.Context //nolint:containedctx // server-lifetime context for reconnect goroutines
+-	ln      transport.Transport
+-	peerLn  transport.PeerTransport
+-	keys    *crypto.KeySet
+-	pair    *tunnelcore.SessionPair
+-	conn    *muxconn.Conn
++	baseCtx  context.Context //nolint:containedctx // server-lifetime context for reconnect goroutines
++	ln       transport.Transport
++	peerLn   transport.PeerTransport
++	keys     muxconn.Keys
++	keyStore *keyStore
++	pair     *tunnelcore.SessionPair
++	conn     *muxconn.Conn
+ 
+ 	controlConn *muxconn.Conn
+ 	session     *smux.Session
+@@ -69,6 +68,7 @@
  	onOpen        SessionOpenFunc
  	onClose       SessionCloseFunc
  	onTraffic     TrafficFunc
@@ -8,7 +44,29 @@
  	deviceID      string
  	sessionID     string
  
-@@ -106,10 +107,14 @@
+@@ -87,11 +87,16 @@
+ 
+ // Config holds runtime configuration for [Run].
+ type Config struct {
+-	Transport        string
+-	Provider         string
+-	RoomURL          string
+-	ChannelID        string
+-	KeyHex           string
++	Transport string
++	Provider  string
++	RoomURL   string
++	ChannelID string
++	KeyHex    string
++	// PrivateKey selects the fork's key exchange instead of a shared secret:
++	// each peer negotiates a session key of its own against this key's public
++	// half, so participants in one room can no longer read each other. Set it
++	// and KeyHex is ignored. See fork_keys.go.
++	PrivateKey       string
+ 	DNSServer        string
+ 	Resolver         *net.Resolver
+ 	SOCKSProxyAddr   string
+@@ -106,19 +111,23 @@
  	Liveness         control.Config
  	Traffic          transport.TrafficConfig
  	AuthHook         handshake.AuthFunc
@@ -27,10 +85,23 @@
  }
  
  // Run starts the server with the given configuration.
-@@ -138,6 +143,7 @@
+ func Run(ctx context.Context, cfg Config) error {
+ 	runCtx, cancel := context.WithCancel(ctx)
+ 	defer cancel()
+-	keys, err := tunnelcore.SetupKeySet(cfg.KeyHex, crypto.Server)
++	keys, keyStore, err := serverKeys(cfg)
+ 	if err != nil {
+-		return fmt.Errorf("setup key set: %w", err)
++		return err
+ 	}
+ 	hook := cfg.AuthHook
+ 	if hook == nil {
+@@ -137,7 +146,8 @@
+ 		onTraffic = func(string, string, uint64, uint64) {}
  	}
  	s := &Server{
- 		keys: keys, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
+-		keys: keys, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
++		keys: keys, keyStore: keyStore, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
 +		dialHook:  cfg.DialHook,
  		dnsServer: cfg.DNSServer, resolver: tunnelcore.Resolver(cfg.Resolver, cfg.DNSServer),
  		socksProxyAddr: cfg.SOCKSProxyAddr, socksProxyPort: cfg.SOCKSProxyPort,

@@ -1,0 +1,28 @@
+--- a/internal/tunnelcore/session.go
++++ b/internal/tunnelcore/session.go
+@@ -7,7 +7,6 @@
+ 
+ 	"github.com/xtaci/smux"
+ 
+-	"github.com/openlibrecommunity/olcrtc/internal/crypto"
+ 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
+ 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
+ 	"github.com/openlibrecommunity/olcrtc/internal/transport"
+@@ -36,7 +35,7 @@
+ 
+ // NewSessionPair builds data and optional isolated-control muxconn/smux sessions.
+ // If only the control session fails, the usable data pair is returned with the error.
+-func NewSessionPair(tr transport.Transport, keys *crypto.KeySet, role SessionRole) (*SessionPair, error) {
++func NewSessionPair(tr transport.Transport, keys muxconn.Keys, role SessionRole) (*SessionPair, error) {
+ 	dataConn := muxconn.New(tr, keys)
+ 	controlConn := muxconn.NewControl(tr, keys)
+ 	return NewSessionPairWithConns(tr, dataConn, controlConn, role)
+@@ -79,7 +78,7 @@
+ // NewControlSession builds only an isolated control muxconn/smux session.
+ func NewControlSession(
+ 	tr transport.Transport,
+-	keys *crypto.KeySet,
++	keys muxconn.Keys,
+ 	role SessionRole,
+ ) (*muxconn.Conn, *smux.Session, error) {
+ 	conn := muxconn.NewControl(tr, keys)

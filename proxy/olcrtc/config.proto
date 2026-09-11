@@ -13,7 +13,10 @@ message ClientConfig {
   string provider = 1;   // jitsi | telemost | wbstream | none
   string transport = 2;  // datachannel | vp8channel | seichannel | videochannel
   string room_id = 3;
-  string key = 4;        // 64 hex chars (32-byte shared key)
+  // The server's long-term X25519 public key, base64 or hex, as produced by
+  // `xray x25519`. It replaces the shared room key: the client proves nothing
+  // by holding it, and every connection negotiates a session key of its own.
+  string public_key = 4;
   string dns_server = 5; // resolver for reaching the SFU, e.g. 8.8.8.8:53
   string auth_token = 6; // optional provider account token
 
@@ -50,9 +53,16 @@ message ClientConfig {
   int32 liveness_failures = 28;
   string max_session_duration = 29;
 
-  // Client identity forwarded to the server auth hook.
+  // Who this client is. The UUID is the credential the server authorises
+  // against its user list; device_id identifies the machine, so one
+  // subscription used from several devices can be counted and capped.
+  //
+  // Both travel inside the encrypted session rather than in the opening
+  // frame, so neither is recoverable from recorded traffic even by someone
+  // who later obtains the server's private key.
   string device_id = 30;
   string device_id_path = 31;
+  string uuid = 32;
 }
 
 // ServerConfig configures an olcrtc inbound (the tunnel server). It joins the
@@ -62,7 +72,9 @@ message ServerConfig {
   string provider = 1;
   string transport = 2;
   string room_id = 3;
-  string key = 4;
+  // The server's long-term X25519 private key, base64 or hex. Clients carry
+  // only its public half.
+  string private_key = 4;
   string dns_server = 5;
   string auth_token = 6;
 

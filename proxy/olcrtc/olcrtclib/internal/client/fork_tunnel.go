@@ -7,9 +7,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/tunnelcore"
 )
 
 // This file belongs to the fork, not to olcrtc upstream. It is listed in
@@ -44,10 +42,10 @@ type Tunnel struct {
 func StartTunnel(ctx context.Context, cfg Config) (*Tunnel, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 
-	keys, err := tunnelcore.SetupKeySet(cfg.KeyHex, crypto.Client)
+	keys, err := clientKeys(cfg)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("setup key set: %w", err)
+		return nil, err
 	}
 	deviceID, err := resolveDeviceID(cfg.DeviceID, cfg.DeviceIDPath)
 	if err != nil {

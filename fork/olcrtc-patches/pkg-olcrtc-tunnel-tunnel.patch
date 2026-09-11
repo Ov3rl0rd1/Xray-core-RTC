@@ -1,0 +1,39 @@
+--- a/pkg/olcrtc/tunnel/tunnel.go
++++ b/pkg/olcrtc/tunnel/tunnel.go
+@@ -90,15 +90,17 @@
+ 
+ // Config holds all server tunnel capabilities.
+ type Config struct {
+-	Transport        string
+-	Provider         string
+-	RoomURL          string
+-	ChannelID        string
+-	Engine           string
+-	URL              string
+-	Token            string
+-	ProviderToken    string
+-	KeyHex           string
++	Transport     string
++	Provider      string
++	RoomURL       string
++	ChannelID     string
++	Engine        string
++	URL           string
++	Token         string
++	ProviderToken string
++	KeyHex        string
++	// PrivateKey selects the key exchange instead of a shared secret.
++	PrivateKey       string
+ 	DNSServer        string
+ 	Resolver         *net.Resolver
+ 	SOCKSProxyAddr   string
+@@ -141,7 +143,8 @@
+ 	return server.Config{
+ 		Transport: cfg.Transport, Provider: cfg.Provider, RoomURL: cfg.RoomURL,
+ 		ChannelID: cfg.ChannelID, Engine: cfg.Engine, URL: cfg.URL, Token: cfg.Token,
+-		ProviderToken: cfg.ProviderToken, KeyHex: cfg.KeyHex, DNSServer: cfg.DNSServer,
++		ProviderToken: cfg.ProviderToken, KeyHex: cfg.KeyHex,
++		PrivateKey: cfg.PrivateKey, DNSServer: cfg.DNSServer,
+ 		Resolver: cfg.Resolver, SOCKSProxyAddr: cfg.SOCKSProxyAddr,
+ 		SOCKSProxyPort: cfg.SOCKSProxyPort, SOCKSProxyUser: cfg.SOCKSProxyUser,
+ 		SOCKSProxyPass: cfg.SOCKSProxyPass, TransportOptions: toTransportOptions(cfg.TransportOptions),

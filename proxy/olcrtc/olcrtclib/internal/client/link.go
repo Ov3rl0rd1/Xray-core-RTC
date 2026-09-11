@@ -320,6 +320,9 @@ func (c *Client) tryReopenSession(
 	cancel context.CancelFunc,
 	attempt int,
 ) bool {
+	// The server has forgotten this peer's session key along with the peer, so
+	// the carrier being rebuilt means a fresh exchange. See fork_keys.go.
+	c.resetKeys()
 	conn := muxconn.New(c.ln, c.keys)
 	controlConn := muxconn.NewControl(c.ln, c.keys)
 	c.sessMu.Lock()

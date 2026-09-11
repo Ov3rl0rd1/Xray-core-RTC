@@ -1,0 +1,31 @@
+--- a/internal/server/peer.go
++++ b/internal/server/peer.go
+@@ -205,7 +205,7 @@
+ 		}
+ 		peer = newPeerSession(peerID, true)
+ 	}
+-	conn := muxconn.NewPeerControlUnbound(s.ln, s.keys, peerID)
++	conn := muxconn.NewPeerControlUnbound(s.ln, s.keysFor(peerID), peerID)
+ 	if conn == nil {
+ 		s.sessMu.Unlock()
+ 		return nil
+@@ -326,7 +326,7 @@
+ 		s.sessMu.Unlock()
+ 		return nil
+ 	}
+-	conn := muxconn.NewPeer(s.peerLn, s.keys, peerID)
++	conn := muxconn.NewPeer(s.peerLn, s.keysFor(peerID), peerID)
+ 	session, err := tunnelcore.NewSession(conn, tunnelcore.ServerRole, runtime.SmuxConfigFor(s.ln))
+ 	if err != nil {
+ 		s.sessMu.Unlock()
+@@ -500,6 +500,10 @@
+ 	}
+ 	s.sessMu.Unlock()
+ 	if current {
++		// Drop the peer's session key with the peer. A room that has seen a lot
++		// of churn would otherwise keep one per participant that ever joined,
++		// and a peer that comes back simply negotiates again.
++		s.forgetKeys(peer.peerID)
+ 		s.closePeerSession(peer, reason)
+ 	}
+ }

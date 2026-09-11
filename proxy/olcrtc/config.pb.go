@@ -21,41 +21,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ClientConfig configures an olcrtc outbound (the tunnel client). It brings up
+// a WebRTC carrier to a room and multiplexes each outbound connection as a
+// stream over it. See github.com/openlibrecommunity/olcrtc for field semantics.
 type ClientConfig struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Provider           string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
-	Transport          string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"`
-	RoomId             string                 `protobuf:"bytes,3,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
-	Key                string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
-	DnsServer          string                 `protobuf:"bytes,5,opt,name=dns_server,json=dnsServer,proto3" json:"dns_server,omitempty"`
-	AuthToken          string                 `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
-	Engine             string                 `protobuf:"bytes,7,opt,name=engine,proto3" json:"engine,omitempty"`
-	Url                string                 `protobuf:"bytes,8,opt,name=url,proto3" json:"url,omitempty"`
-	Token              string                 `protobuf:"bytes,9,opt,name=token,proto3" json:"token,omitempty"`
-	Vp8Fps             int32                  `protobuf:"varint,10,opt,name=vp8_fps,json=vp8Fps,proto3" json:"vp8_fps,omitempty"`
-	Vp8BatchSize       int32                  `protobuf:"varint,11,opt,name=vp8_batch_size,json=vp8BatchSize,proto3" json:"vp8_batch_size,omitempty"`
-	SeiFps             int32                  `protobuf:"varint,12,opt,name=sei_fps,json=seiFps,proto3" json:"sei_fps,omitempty"`
-	SeiBatchSize       int32                  `protobuf:"varint,13,opt,name=sei_batch_size,json=seiBatchSize,proto3" json:"sei_batch_size,omitempty"`
-	SeiFragmentSize    int32                  `protobuf:"varint,14,opt,name=sei_fragment_size,json=seiFragmentSize,proto3" json:"sei_fragment_size,omitempty"`
-	SeiAckTimeoutMs    int32                  `protobuf:"varint,15,opt,name=sei_ack_timeout_ms,json=seiAckTimeoutMs,proto3" json:"sei_ack_timeout_ms,omitempty"`
-	VideoWidth         int32                  `protobuf:"varint,16,opt,name=video_width,json=videoWidth,proto3" json:"video_width,omitempty"`
-	VideoHeight        int32                  `protobuf:"varint,17,opt,name=video_height,json=videoHeight,proto3" json:"video_height,omitempty"`
-	VideoFps           int32                  `protobuf:"varint,18,opt,name=video_fps,json=videoFps,proto3" json:"video_fps,omitempty"`
-	VideoBitrate       string                 `protobuf:"bytes,19,opt,name=video_bitrate,json=videoBitrate,proto3" json:"video_bitrate,omitempty"`
-	VideoHw            string                 `protobuf:"bytes,20,opt,name=video_hw,json=videoHw,proto3" json:"video_hw,omitempty"`
-	VideoQrSize        int32                  `protobuf:"varint,21,opt,name=video_qr_size,json=videoQrSize,proto3" json:"video_qr_size,omitempty"`
-	VideoQrRecovery    string                 `protobuf:"bytes,22,opt,name=video_qr_recovery,json=videoQrRecovery,proto3" json:"video_qr_recovery,omitempty"`
-	VideoCodec         string                 `protobuf:"bytes,23,opt,name=video_codec,json=videoCodec,proto3" json:"video_codec,omitempty"`
-	VideoTileModule    int32                  `protobuf:"varint,24,opt,name=video_tile_module,json=videoTileModule,proto3" json:"video_tile_module,omitempty"`
-	VideoTileRs        int32                  `protobuf:"varint,25,opt,name=video_tile_rs,json=videoTileRs,proto3" json:"video_tile_rs,omitempty"`
-	LivenessInterval   string                 `protobuf:"bytes,26,opt,name=liveness_interval,json=livenessInterval,proto3" json:"liveness_interval,omitempty"`
-	LivenessTimeout    string                 `protobuf:"bytes,27,opt,name=liveness_timeout,json=livenessTimeout,proto3" json:"liveness_timeout,omitempty"`
-	LivenessFailures   int32                  `protobuf:"varint,28,opt,name=liveness_failures,json=livenessFailures,proto3" json:"liveness_failures,omitempty"`
-	MaxSessionDuration string                 `protobuf:"bytes,29,opt,name=max_session_duration,json=maxSessionDuration,proto3" json:"max_session_duration,omitempty"`
-	DeviceId           string                 `protobuf:"bytes,30,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	DeviceIdPath       string                 `protobuf:"bytes,31,opt,name=device_id_path,json=deviceIdPath,proto3" json:"device_id_path,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Provider  string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`   // jitsi | telemost | wbstream | none
+	Transport string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"` // datachannel | vp8channel | seichannel | videochannel
+	RoomId    string                 `protobuf:"bytes,3,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
+	// The server's long-term X25519 public key, base64 or hex, as produced by
+	// `xray x25519`. It replaces the shared room key: the client proves nothing
+	// by holding it, and every connection negotiates a session key of its own.
+	PublicKey string `protobuf:"bytes,4,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	DnsServer string `protobuf:"bytes,5,opt,name=dns_server,json=dnsServer,proto3" json:"dns_server,omitempty"` // resolver for reaching the SFU, e.g. 8.8.8.8:53
+	AuthToken string `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"` // optional provider account token
+	// Direct engine mode (provider == "none").
+	Engine string `protobuf:"bytes,7,opt,name=engine,proto3" json:"engine,omitempty"` // livekit | goolom | jitsi
+	Url    string `protobuf:"bytes,8,opt,name=url,proto3" json:"url,omitempty"`
+	Token  string `protobuf:"bytes,9,opt,name=token,proto3" json:"token,omitempty"`
+	// vp8channel tuning.
+	Vp8Fps       int32 `protobuf:"varint,10,opt,name=vp8_fps,json=vp8Fps,proto3" json:"vp8_fps,omitempty"`
+	Vp8BatchSize int32 `protobuf:"varint,11,opt,name=vp8_batch_size,json=vp8BatchSize,proto3" json:"vp8_batch_size,omitempty"`
+	// seichannel tuning.
+	SeiFps          int32 `protobuf:"varint,12,opt,name=sei_fps,json=seiFps,proto3" json:"sei_fps,omitempty"`
+	SeiBatchSize    int32 `protobuf:"varint,13,opt,name=sei_batch_size,json=seiBatchSize,proto3" json:"sei_batch_size,omitempty"`
+	SeiFragmentSize int32 `protobuf:"varint,14,opt,name=sei_fragment_size,json=seiFragmentSize,proto3" json:"sei_fragment_size,omitempty"`
+	SeiAckTimeoutMs int32 `protobuf:"varint,15,opt,name=sei_ack_timeout_ms,json=seiAckTimeoutMs,proto3" json:"sei_ack_timeout_ms,omitempty"`
+	// videochannel tuning.
+	VideoWidth      int32  `protobuf:"varint,16,opt,name=video_width,json=videoWidth,proto3" json:"video_width,omitempty"`
+	VideoHeight     int32  `protobuf:"varint,17,opt,name=video_height,json=videoHeight,proto3" json:"video_height,omitempty"`
+	VideoFps        int32  `protobuf:"varint,18,opt,name=video_fps,json=videoFps,proto3" json:"video_fps,omitempty"`
+	VideoBitrate    string `protobuf:"bytes,19,opt,name=video_bitrate,json=videoBitrate,proto3" json:"video_bitrate,omitempty"`
+	VideoHw         string `protobuf:"bytes,20,opt,name=video_hw,json=videoHw,proto3" json:"video_hw,omitempty"`
+	VideoQrSize     int32  `protobuf:"varint,21,opt,name=video_qr_size,json=videoQrSize,proto3" json:"video_qr_size,omitempty"`
+	VideoQrRecovery string `protobuf:"bytes,22,opt,name=video_qr_recovery,json=videoQrRecovery,proto3" json:"video_qr_recovery,omitempty"`
+	VideoCodec      string `protobuf:"bytes,23,opt,name=video_codec,json=videoCodec,proto3" json:"video_codec,omitempty"`
+	VideoTileModule int32  `protobuf:"varint,24,opt,name=video_tile_module,json=videoTileModule,proto3" json:"video_tile_module,omitempty"`
+	VideoTileRs     int32  `protobuf:"varint,25,opt,name=video_tile_rs,json=videoTileRs,proto3" json:"video_tile_rs,omitempty"`
+	// Liveness / lifecycle tuning (Go duration strings; empty = defaults).
+	LivenessInterval   string `protobuf:"bytes,26,opt,name=liveness_interval,json=livenessInterval,proto3" json:"liveness_interval,omitempty"`
+	LivenessTimeout    string `protobuf:"bytes,27,opt,name=liveness_timeout,json=livenessTimeout,proto3" json:"liveness_timeout,omitempty"`
+	LivenessFailures   int32  `protobuf:"varint,28,opt,name=liveness_failures,json=livenessFailures,proto3" json:"liveness_failures,omitempty"`
+	MaxSessionDuration string `protobuf:"bytes,29,opt,name=max_session_duration,json=maxSessionDuration,proto3" json:"max_session_duration,omitempty"`
+	// Who this client is. The UUID is the credential the server authorises
+	// against its user list; device_id identifies the machine, so one
+	// subscription used from several devices can be counted and capped.
+	//
+	// Both travel inside the encrypted session rather than in the opening
+	// frame, so neither is recoverable from recorded traffic even by someone
+	// who later obtains the server's private key.
+	DeviceId      string `protobuf:"bytes,30,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	DeviceIdPath  string `protobuf:"bytes,31,opt,name=device_id_path,json=deviceIdPath,proto3" json:"device_id_path,omitempty"`
+	Uuid          string `protobuf:"bytes,32,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClientConfig) Reset() {
@@ -109,9 +128,9 @@ func (x *ClientConfig) GetRoomId() string {
 	return ""
 }
 
-func (x *ClientConfig) GetKey() string {
+func (x *ClientConfig) GetPublicKey() string {
 	if x != nil {
-		return x.Key
+		return x.PublicKey
 	}
 	return ""
 }
@@ -305,37 +324,49 @@ func (x *ClientConfig) GetDeviceIdPath() string {
 	return ""
 }
 
+func (x *ClientConfig) GetUuid() string {
+	if x != nil {
+		return x.Uuid
+	}
+	return ""
+}
+
+// ServerConfig configures an olcrtc inbound (the tunnel server). It joins the
+// same room, accepts tunnel streams and dispatches their targets through Xray's
+// router. It shares ClientConfig's field shape; device fields are ignored.
 type ServerConfig struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Provider           string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
-	Transport          string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"`
-	RoomId             string                 `protobuf:"bytes,3,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
-	Key                string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
-	DnsServer          string                 `protobuf:"bytes,5,opt,name=dns_server,json=dnsServer,proto3" json:"dns_server,omitempty"`
-	AuthToken          string                 `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
-	Engine             string                 `protobuf:"bytes,7,opt,name=engine,proto3" json:"engine,omitempty"`
-	Url                string                 `protobuf:"bytes,8,opt,name=url,proto3" json:"url,omitempty"`
-	Token              string                 `protobuf:"bytes,9,opt,name=token,proto3" json:"token,omitempty"`
-	Vp8Fps             int32                  `protobuf:"varint,10,opt,name=vp8_fps,json=vp8Fps,proto3" json:"vp8_fps,omitempty"`
-	Vp8BatchSize       int32                  `protobuf:"varint,11,opt,name=vp8_batch_size,json=vp8BatchSize,proto3" json:"vp8_batch_size,omitempty"`
-	SeiFps             int32                  `protobuf:"varint,12,opt,name=sei_fps,json=seiFps,proto3" json:"sei_fps,omitempty"`
-	SeiBatchSize       int32                  `protobuf:"varint,13,opt,name=sei_batch_size,json=seiBatchSize,proto3" json:"sei_batch_size,omitempty"`
-	SeiFragmentSize    int32                  `protobuf:"varint,14,opt,name=sei_fragment_size,json=seiFragmentSize,proto3" json:"sei_fragment_size,omitempty"`
-	SeiAckTimeoutMs    int32                  `protobuf:"varint,15,opt,name=sei_ack_timeout_ms,json=seiAckTimeoutMs,proto3" json:"sei_ack_timeout_ms,omitempty"`
-	VideoWidth         int32                  `protobuf:"varint,16,opt,name=video_width,json=videoWidth,proto3" json:"video_width,omitempty"`
-	VideoHeight        int32                  `protobuf:"varint,17,opt,name=video_height,json=videoHeight,proto3" json:"video_height,omitempty"`
-	VideoFps           int32                  `protobuf:"varint,18,opt,name=video_fps,json=videoFps,proto3" json:"video_fps,omitempty"`
-	VideoBitrate       string                 `protobuf:"bytes,19,opt,name=video_bitrate,json=videoBitrate,proto3" json:"video_bitrate,omitempty"`
-	VideoHw            string                 `protobuf:"bytes,20,opt,name=video_hw,json=videoHw,proto3" json:"video_hw,omitempty"`
-	VideoQrSize        int32                  `protobuf:"varint,21,opt,name=video_qr_size,json=videoQrSize,proto3" json:"video_qr_size,omitempty"`
-	VideoQrRecovery    string                 `protobuf:"bytes,22,opt,name=video_qr_recovery,json=videoQrRecovery,proto3" json:"video_qr_recovery,omitempty"`
-	VideoCodec         string                 `protobuf:"bytes,23,opt,name=video_codec,json=videoCodec,proto3" json:"video_codec,omitempty"`
-	VideoTileModule    int32                  `protobuf:"varint,24,opt,name=video_tile_module,json=videoTileModule,proto3" json:"video_tile_module,omitempty"`
-	VideoTileRs        int32                  `protobuf:"varint,25,opt,name=video_tile_rs,json=videoTileRs,proto3" json:"video_tile_rs,omitempty"`
-	LivenessInterval   string                 `protobuf:"bytes,26,opt,name=liveness_interval,json=livenessInterval,proto3" json:"liveness_interval,omitempty"`
-	LivenessTimeout    string                 `protobuf:"bytes,27,opt,name=liveness_timeout,json=livenessTimeout,proto3" json:"liveness_timeout,omitempty"`
-	LivenessFailures   int32                  `protobuf:"varint,28,opt,name=liveness_failures,json=livenessFailures,proto3" json:"liveness_failures,omitempty"`
-	MaxSessionDuration string                 `protobuf:"bytes,29,opt,name=max_session_duration,json=maxSessionDuration,proto3" json:"max_session_duration,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Provider  string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	Transport string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"`
+	RoomId    string                 `protobuf:"bytes,3,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
+	// The server's long-term X25519 private key, base64 or hex. Clients carry
+	// only its public half.
+	PrivateKey         string `protobuf:"bytes,4,opt,name=private_key,json=privateKey,proto3" json:"private_key,omitempty"`
+	DnsServer          string `protobuf:"bytes,5,opt,name=dns_server,json=dnsServer,proto3" json:"dns_server,omitempty"`
+	AuthToken          string `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
+	Engine             string `protobuf:"bytes,7,opt,name=engine,proto3" json:"engine,omitempty"`
+	Url                string `protobuf:"bytes,8,opt,name=url,proto3" json:"url,omitempty"`
+	Token              string `protobuf:"bytes,9,opt,name=token,proto3" json:"token,omitempty"`
+	Vp8Fps             int32  `protobuf:"varint,10,opt,name=vp8_fps,json=vp8Fps,proto3" json:"vp8_fps,omitempty"`
+	Vp8BatchSize       int32  `protobuf:"varint,11,opt,name=vp8_batch_size,json=vp8BatchSize,proto3" json:"vp8_batch_size,omitempty"`
+	SeiFps             int32  `protobuf:"varint,12,opt,name=sei_fps,json=seiFps,proto3" json:"sei_fps,omitempty"`
+	SeiBatchSize       int32  `protobuf:"varint,13,opt,name=sei_batch_size,json=seiBatchSize,proto3" json:"sei_batch_size,omitempty"`
+	SeiFragmentSize    int32  `protobuf:"varint,14,opt,name=sei_fragment_size,json=seiFragmentSize,proto3" json:"sei_fragment_size,omitempty"`
+	SeiAckTimeoutMs    int32  `protobuf:"varint,15,opt,name=sei_ack_timeout_ms,json=seiAckTimeoutMs,proto3" json:"sei_ack_timeout_ms,omitempty"`
+	VideoWidth         int32  `protobuf:"varint,16,opt,name=video_width,json=videoWidth,proto3" json:"video_width,omitempty"`
+	VideoHeight        int32  `protobuf:"varint,17,opt,name=video_height,json=videoHeight,proto3" json:"video_height,omitempty"`
+	VideoFps           int32  `protobuf:"varint,18,opt,name=video_fps,json=videoFps,proto3" json:"video_fps,omitempty"`
+	VideoBitrate       string `protobuf:"bytes,19,opt,name=video_bitrate,json=videoBitrate,proto3" json:"video_bitrate,omitempty"`
+	VideoHw            string `protobuf:"bytes,20,opt,name=video_hw,json=videoHw,proto3" json:"video_hw,omitempty"`
+	VideoQrSize        int32  `protobuf:"varint,21,opt,name=video_qr_size,json=videoQrSize,proto3" json:"video_qr_size,omitempty"`
+	VideoQrRecovery    string `protobuf:"bytes,22,opt,name=video_qr_recovery,json=videoQrRecovery,proto3" json:"video_qr_recovery,omitempty"`
+	VideoCodec         string `protobuf:"bytes,23,opt,name=video_codec,json=videoCodec,proto3" json:"video_codec,omitempty"`
+	VideoTileModule    int32  `protobuf:"varint,24,opt,name=video_tile_module,json=videoTileModule,proto3" json:"video_tile_module,omitempty"`
+	VideoTileRs        int32  `protobuf:"varint,25,opt,name=video_tile_rs,json=videoTileRs,proto3" json:"video_tile_rs,omitempty"`
+	LivenessInterval   string `protobuf:"bytes,26,opt,name=liveness_interval,json=livenessInterval,proto3" json:"liveness_interval,omitempty"`
+	LivenessTimeout    string `protobuf:"bytes,27,opt,name=liveness_timeout,json=livenessTimeout,proto3" json:"liveness_timeout,omitempty"`
+	LivenessFailures   int32  `protobuf:"varint,28,opt,name=liveness_failures,json=livenessFailures,proto3" json:"liveness_failures,omitempty"`
+	MaxSessionDuration string `protobuf:"bytes,29,opt,name=max_session_duration,json=maxSessionDuration,proto3" json:"max_session_duration,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -391,9 +422,9 @@ func (x *ServerConfig) GetRoomId() string {
 	return ""
 }
 
-func (x *ServerConfig) GetKey() string {
+func (x *ServerConfig) GetPrivateKey() string {
 	if x != nil {
-		return x.Key
+		return x.PrivateKey
 	}
 	return ""
 }
@@ -577,12 +608,13 @@ var File_proxy_olcrtc_config_proto protoreflect.FileDescriptor
 
 const file_proxy_olcrtc_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19proxy/olcrtc/config.proto\x12\x11xray.proxy.olcrtc\"\xa4\b\n" +
+	"\x19proxy/olcrtc/config.proto\x12\x11xray.proxy.olcrtc\"\xc5\b\n" +
 	"\fClientConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1c\n" +
 	"\ttransport\x18\x02 \x01(\tR\ttransport\x12\x17\n" +
-	"\aroom_id\x18\x03 \x01(\tR\x06roomId\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\x12\x1d\n" +
+	"\aroom_id\x18\x03 \x01(\tR\x06roomId\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x04 \x01(\tR\tpublicKey\x12\x1d\n" +
 	"\n" +
 	"dns_server\x18\x05 \x01(\tR\tdnsServer\x12\x1d\n" +
 	"\n" +
@@ -614,12 +646,14 @@ const file_proxy_olcrtc_config_proto_rawDesc = "" +
 	"\x11liveness_failures\x18\x1c \x01(\x05R\x10livenessFailures\x120\n" +
 	"\x14max_session_duration\x18\x1d \x01(\tR\x12maxSessionDuration\x12\x1b\n" +
 	"\tdevice_id\x18\x1e \x01(\tR\bdeviceId\x12$\n" +
-	"\x0edevice_id_path\x18\x1f \x01(\tR\fdeviceIdPath\"\xe1\a\n" +
+	"\x0edevice_id_path\x18\x1f \x01(\tR\fdeviceIdPath\x12\x12\n" +
+	"\x04uuid\x18  \x01(\tR\x04uuid\"\xf0\a\n" +
 	"\fServerConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x1c\n" +
 	"\ttransport\x18\x02 \x01(\tR\ttransport\x12\x17\n" +
-	"\aroom_id\x18\x03 \x01(\tR\x06roomId\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\x12\x1d\n" +
+	"\aroom_id\x18\x03 \x01(\tR\x06roomId\x12\x1f\n" +
+	"\vprivate_key\x18\x04 \x01(\tR\n" +
+	"privateKey\x12\x1d\n" +
 	"\n" +
 	"dns_server\x18\x05 \x01(\tR\tdnsServer\x12\x1d\n" +
 	"\n" +

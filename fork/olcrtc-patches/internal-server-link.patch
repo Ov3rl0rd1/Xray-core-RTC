@@ -1,0 +1,29 @@
+--- a/internal/server/link.go
++++ b/internal/server/link.go
+@@ -57,7 +57,7 @@
+ }
+ 
+ func (s *Server) installSession() {
+-	pair, err := tunnelcore.NewSessionPair(s.ln, s.keys, tunnelcore.ServerRole)
++	pair, err := tunnelcore.NewSessionPair(s.ln, s.keysFor(""), tunnelcore.ServerRole)
+ 	if pair == nil {
+ 		logger.Warnf("smux server init failed: %v", err)
+ 		return
+@@ -80,7 +80,7 @@
+ 		s.installPeerControlPlane(peerControl)
+ 		return
+ 	}
+-	conn, session, err := tunnelcore.NewControlSession(s.ln, s.keys, tunnelcore.ServerRole)
++	conn, session, err := tunnelcore.NewControlSession(s.ln, s.keysFor(""), tunnelcore.ServerRole)
+ 	if err != nil {
+ 		logger.Warnf("control smux server init failed (peer-routing): %v", err)
+ 		return
+@@ -135,7 +135,7 @@
+ 		}
+ 	}
+ 	s.sessMu.RUnlock()
+-	replacement, err := tunnelcore.NewSessionPair(s.ln, s.keys, tunnelcore.ServerRole)
++	replacement, err := tunnelcore.NewSessionPair(s.ln, s.keysFor(""), tunnelcore.ServerRole)
+ 	if replacement == nil {
+ 		logger.Warnf("smux server re-init failed: %v", err)
+ 		return

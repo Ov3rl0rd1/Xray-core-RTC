@@ -17,7 +17,6 @@ import (
 	"github.com/xtaci/smux"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/muxconn"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
@@ -52,7 +51,7 @@ const (
 // Client handles local SOCKS5 connections and tunnels them to the server.
 type Client struct {
 	ln          transport.Transport
-	keys        *crypto.KeySet
+	keys        muxconn.Keys
 	pair        *tunnelcore.SessionPair
 	conn        *muxconn.Conn
 	controlConn *muxconn.Conn
@@ -88,11 +87,16 @@ type HealthFunc func(control.Status)
 
 // Config holds runtime configuration for [Run], [RunWithReady], and [RunWithAddress].
 type Config struct {
-	Transport        string
-	Provider         string
-	RoomURL          string
-	ChannelID        string
-	KeyHex           string
+	Transport string
+	Provider  string
+	RoomURL   string
+	ChannelID string
+	KeyHex    string
+	// ServerPublicKey selects the fork's key exchange instead of a shared
+	// secret: the client carries only the server's public half and every
+	// connection negotiates a session key of its own. Set it and KeyHex is
+	// ignored. See internal/keyexchange.
+	ServerPublicKey  string
 	LocalAddr        string
 	DNSServer        string
 	Resolver         *net.Resolver
@@ -128,9 +132,9 @@ func RunWithReady(ctx context.Context, cfg Config, onReady func()) error {
 func RunWithAddress(ctx context.Context, cfg Config, onReady func(actualAddr string)) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	keys, err := tunnelcore.SetupKeySet(cfg.KeyHex, crypto.Client)
+	keys, err := clientKeys(cfg)
 	if err != nil {
-		return fmt.Errorf("setup key set: %w", err)
+		return err
 	}
 	deviceID, err := resolveDeviceID(cfg.DeviceID, cfg.DeviceIDPath)
 	if err != nil {

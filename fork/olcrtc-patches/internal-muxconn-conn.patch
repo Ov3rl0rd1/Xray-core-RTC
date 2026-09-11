@@ -1,0 +1,126 @@
+--- a/internal/muxconn/conn.go
++++ b/internal/muxconn/conn.go
+@@ -26,7 +26,6 @@
+ 	"sync/atomic"
+ 	"time"
+ 
+-	"github.com/openlibrecommunity/olcrtc/internal/crypto"
+ 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+ 	"github.com/openlibrecommunity/olcrtc/internal/transport"
+ )
+@@ -142,11 +141,45 @@
+ // Plaintext buffers are recycled through frameBufPool: Push borrows a
+ // buffer to decrypt into, ships it through the channel, and Read returns
+ // the buffer to the pool once its caller has consumed all the bytes.
++// Keys protects one record at a time. *crypto.KeySet is the ordinary
++// implementation; taking an interface lets the key itself be negotiated on the
++// wire before the first record flows, instead of having to be shared out of
++// band ahead of time.
++//
++// A Keys that also implements Binder is handed this conn's send function when
++// the conn is built, which is how a negotiating implementation reaches the
++// transport without this package having to know it exists.
++type Keys interface {
++	SealInto(dst, plaintext, aad []byte) ([]byte, error)
++	OpenInto(dst, record, aad []byte) ([]byte, error)
++}
++
++// Binder is implemented by a Keys that needs to send records of its own.
++//
++// aad identifies which plane the send path belongs to — the same value the
++// conn passes to SealInto and OpenInto — so a Keys handed both the data and
++// the control conn can answer on whichever one a record arrived from.
++type Binder interface {
++	Bind(aad []byte, send func([]byte) error, canSend func() bool)
++}
++
++// bindKeys hands the conn's send path to a Keys that asked for it.
++func bindKeys(c *Conn) *Conn {
++	if b, ok := c.keys.(Binder); ok {
++		canSend := c.canSend
++		if canSend == nil {
++			canSend = c.ln.CanSend
++		}
++		b.Bind(c.aad, c.send, canSend)
++	}
++	return c
++}
++
+ type Conn struct {
+ 	ln      transport.Transport
+ 	send    func([]byte) error
+ 	canSend func() bool // if nil, uses ln.CanSend
+-	keys    *crypto.KeySet
++	keys    Keys
+ 	aad     []byte
+ 
+ 	in        chan *[]byte
+@@ -179,21 +212,21 @@
+ 
+ // New wires a Conn over the given transport. Push must be set as the
+ // transport's OnData callback before this conn is used.
+-func New(ln transport.Transport, keys *crypto.KeySet) *Conn {
+-	return &Conn{
++func New(ln transport.Transport, keys Keys) *Conn {
++	return bindKeys(&Conn{
+ 		ln:      ln,
+ 		send:    ln.Send,
+ 		keys:    keys,
+ 		aad:     []byte(dataRecordAAD),
+ 		in:      make(chan *[]byte, inboundQueue),
+ 		closeCh: make(chan struct{}),
+-	}
++	})
+ }
+ 
+ // NewControl wires a Conn that routes through the transport's isolated
+ // control-plane channel (transport.ControlPlane). Returns nil if the
+ // transport does not implement ControlPlane.
+-func NewControl(ln transport.Transport, keys *crypto.KeySet) *Conn {
++func NewControl(ln transport.Transport, keys Keys) *Conn {
+ 	cp, ok := ln.(transport.ControlPlane)
+ 	if !ok {
+ 		return nil
+@@ -208,12 +241,12 @@
+ 		closeCh: make(chan struct{}),
+ 	}
+ 	cp.SetControlOnData(func(data []byte) { c.Push(data) })
+-	return c
++	return bindKeys(c)
+ }
+ 
+ // NewPeer wires a Conn whose writes are addressed to a specific transport peer.
+-func NewPeer(ln transport.PeerTransport, keys *crypto.KeySet, peerID string) *Conn {
+-	return &Conn{
++func NewPeer(ln transport.PeerTransport, keys Keys, peerID string) *Conn {
++	return bindKeys(&Conn{
+ 		ln: ln,
+ 		send: func(data []byte) error {
+ 			return ln.SendTo(peerID, data)
+@@ -222,7 +255,7 @@
+ 		aad:     []byte(dataRecordAAD),
+ 		in:      make(chan *[]byte, inboundQueue),
+ 		closeCh: make(chan struct{}),
+-	}
++	})
+ }
+ 
+ // NewPeerControlUnbound wires a Conn to the per-peer control plane of a
+@@ -233,7 +266,7 @@
+ // caller must feed it via Push. PeerControlPlane exposes a single
+ // SetControlOnPeerData callback covering every peer, so registering here
+ // would clobber the caller's demultiplexer - hence the name.
+-func NewPeerControlUnbound(ln transport.Transport, keys *crypto.KeySet, peerID string) *Conn {
++func NewPeerControlUnbound(ln transport.Transport, keys Keys, peerID string) *Conn {
+ 	cp, ok := ln.(transport.PeerControlPlane)
+ 	if !ok {
+ 		return nil
+@@ -251,7 +284,7 @@
+ 		in:      make(chan *[]byte, inboundQueue),
+ 		closeCh: make(chan struct{}),
+ 	}
+-	return c
++	return bindKeys(c)
+ }
+ 
+ // Push hands an encrypted wire payload (one OnData event) to the conn.

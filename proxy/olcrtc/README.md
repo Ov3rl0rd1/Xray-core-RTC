@@ -5,9 +5,13 @@ encrypted TCP‑over‑WebRTC tunnel into this Xray fork as a first‑class prox
 protocol, with **both** a client (outbound) and a server (inbound).
 
 Traffic is disguised as an ordinary video call on an allowed SFU service
-(Yandex Telemost, WbStream) and additionally encrypted end‑to‑end
-with a shared XChaCha20‑Poly1305 key. Inside the call it multiplexes many TCP
-connections (smux) over the WebRTC data/video channel.
+(Yandex Telemost, WbStream) and additionally encrypted end‑to‑end. Inside the
+call it multiplexes many TCP connections (smux) over the WebRTC video channel.
+
+The server holds a long‑term X25519 key pair and clients carry only its public
+half, the same shape as REALITY and WireGuard. Every connection negotiates a
+session key of its own before anything else flows — see
+[Keys & identity](#keys--identity).
 
 ```
 app ─▶ Xray (socks/vless/…) ─▶ olcrtc outbound  ══WebRTC/SFU══▶  olcrtc inbound ─▶ Xray router ─▶ internet
@@ -16,7 +20,7 @@ app ─▶ Xray (socks/vless/…) ─▶ olcrtc outbound  ══WebRTC/SFU══
 
 **Contents:** [Roles](#roles) · [Settings reference](#settings-reference) ·
 [Providers](#providers) · [Transports & speed](#transports--speed) ·
-[Users & identity](#users--identity) · [Speed limiting](#speed-limiting) ·
+[Keys & identity](#keys--identity) · [Speed limiting](#speed-limiting) ·
 [Connected users](#connected-users) · [Example configs](#example-configs) ·
 [Embedded usage](#embedded-usage) · [Roadmap](#roadmap--planned-follow-ups) ·
 [Caveats](#caveats).
@@ -36,7 +40,8 @@ each target through Xray's router — so routing rules, DNS, domain sniffing,
 stats and the chosen egress outbound (`freedom`, chaining, etc.) all apply on
 the server, exactly like a normal inbound.
 
-Both sides must share the same **`key`** and **`roomId`** and use the same
+The server is configured with **`privateKey`**; every client with the matching
+**`publicKey`**. Both sides must name the same **`roomId`** and use the same
 **`provider`** + **`transport`**.
 
 ---
@@ -54,7 +59,8 @@ shown below.
 | `provider` | string | ✅ | — | `telemost`, `wbstream`, or `none`. See [Providers](#providers). |
 | `transport` | string | ✅ | — | `vp8channel` or `seichannel`. See [Transports](#transports--speed). |
 | `roomId` | string | ✅¹ | — | Room reference for the provider. ¹Required unless `provider:"none"`. Telemost/WbStream: room ID created on the service site. |
-| `key` | string | ✅ | — | 64 hex chars (32‑byte shared key). `openssl rand -hex 32`. **Identical on both sides.** |
+| `privateKey` | string | ✅ (inbound) | — | The server's X25519 private key, from `xray x25519`. |
+| `publicKey` | string | ✅ (outbound) | — | The server's X25519 public key. Not a secret. |
 | `dnsServer` | string | — | system | Resolver used to reach the SFU, e.g. `8.8.8.8:53`. |
 | `authToken` | string | — | — | Provider account token (mainly WbStream). See [Providers](#providers). |
 
@@ -113,7 +119,8 @@ told to reconnect). Use the same liveness/lifecycle values on both sides.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `deviceId` | string | random | Identity echoed to the server's auth hook. **With users configured this is the user's login** — see [Users & identity](#users--identity). |
+| `uuid` | string | — | The subscription this client belongs to. The inbound resolves it against its user list — see [Keys & identity](#keys--identity). |
+| `deviceId` | string | random | Which **machine** this is. Device caps and the fair split between the people sharing a subscription are counted over it. |
 | `deviceIdPath` | string | — | File to persist an auto‑generated device id across restarts (ignored when `deviceId` is set). |
 
 ---
@@ -189,29 +196,70 @@ most CPU‑hungry because of ffmpeg and is best treated as a fallback.
 
 ---
 
-## Users & identity
+## Keys & identity
 
-olcrtc participates in Xray's user system like VLESS/Trojan, so users are managed
-the same way from an external app (typically the gRPC `HandlerService`).
+### Why the shared key had to go
 
-**Model.** The shared `key` (room key) is the *cryptographic* gate — every
-legitimate client holds it. On top of that, an olcrtc **user** is an
-allow‑listed identity used for authorization, per‑user stats, speed limits and
-revocation. The client presents its identity as the outbound's **`deviceId`**;
-the inbound validates it:
+The tunnel used to be encrypted with one XChaCha20 key per room, held by every
+client. That had three consequences:
 
-- **No users registered → open mode:** any client with the room key is admitted
-  (pre‑user‑auth behaviour).
-- **≥1 user registered → allow‑list enforced:** `deviceId` must equal a
-  registered user's email, or the handshake is rejected.
+- a key leaked by one client compromised every other;
+- rotating it meant reissuing every client's configuration at once;
+- and — the one that mattered most — **everyone in the room could decrypt
+  everyone else's traffic**, which ruled out the cheap way to serve several
+  users: putting them in one room rather than one room each.
 
-Set the identity on the client outbound:
+### What replaces it
 
-```json
-"settings": { "provider": "wbstream", "transport": "vp8channel",
-  "roomId": "https://meet.example/room", "key": "<64 hex>",
-  "deviceId": "alice@myapp" }
+The server holds a long‑term X25519 key pair. Generate one with the command
+Xray already ships:
+
+```bash
+xray x25519
+# Private key: <goes in the inbound's privateKey>
+# Public key:  <goes in every client's publicKey>
 ```
+
+Before anything else flows, two frames establish a key for that connection
+alone:
+
+```
+client                                        server
+  │  e_pub ‖ AEAD(k_init){version, timestamp}  │
+  │ ─────────────────────────────────────────► │  only the holder of the
+  │                                            │  private key can open this
+  │  s_epub ‖ AEAD(k_reply){version}           │
+  │ ◄───────────────────────────────────────── │
+  ▼ both derive k_session; everything after uses it
+```
+
+To anyone else in the room both frames are indistinguishable from random: they
+cannot derive `k_init` without the server's private key, so they can neither
+read the exchange nor answer it. That is the same protection against stray
+peers the room key used to give, without the key being a secret anyone has to
+distribute.
+
+Compromising the server's private key later does not open recorded sessions:
+that yields one of the two shared secrets, and the session key needs both — the
+other requires an ephemeral private key both sides discard.
+
+### Two identities, and why they are separate
+
+| | What it says | What it is used for |
+|---|---|---|
+| `uuid` | **which subscription** | authorisation, per‑user traffic, quotas, expiry |
+| `deviceId` | **which machine** | device caps, the fair split between the people sharing a subscription |
+
+Both travel inside the handshake on the first smux stream, which by then is
+already encrypted with the session key — so neither is recoverable from
+recorded traffic even by someone who later obtains the server's private key.
+A 0‑RTT design that put the credential in the opening frame would lose exactly
+that.
+
+With no users registered the inbound is **open**: anyone who completes the key
+exchange gets in, which is the right behaviour for a server whose panel has not
+provisioned it yet. Once a single user exists, the list is enforced and an
+unrecognised `uuid` is refused.
 
 ### Add / remove users at runtime (no restart)
 
@@ -219,21 +267,22 @@ Same API calls as any other protocol, against the olcrtc inbound's **tag**:
 
 ```bash
 xray api adu --server=127.0.0.1:10085 add_user.json           # add
-xray api rmu --server=127.0.0.1:10085 -tag="olcrtc-in" "alice@myapp"   # remove
+xray api rmu --server=127.0.0.1:10085 -tag="olcrtc-in" "<uuid>"   # remove
 ```
 
-olcrtc keys users by **email only** and ignores the account, but the Xray API
-requires *some* registered account on the user, so include a placeholder
-(`add_user.json`, any value — it is not used):
+The inbound resolves a client's `uuid` against the **label** its users were
+registered under, so provision users with that label set to the subscription's
+UUID — which is what panels that key users by UUID already do. The Xray API
+requires *some* account on a user, so include a placeholder; olcrtc ignores it.
 
 ```json
 { "inbounds": [ { "tag": "olcrtc-in", "protocol": "trojan",
-  "settings": { "clients": [ { "email": "alice@myapp", "password": "placeholder" } ] } } ] }
+  "settings": { "clients": [ { "email": "<uuid>", "password": "placeholder" } ] } } ] }
 ```
 
-Or call `HandlerService.AlterInbound` → `AddUserOperation` directly with
-`tag:"olcrtc-in"` and a placeholder account. Removing a user drops future
-handshakes for that identity.
+Removing a user refuses their next handshake. Connections already open keep
+running until their carrier is rebuilt; remove the user from the tariff store
+too if you need them cut off immediately.
 
 ---
 
@@ -307,9 +356,10 @@ files live in [`example/client.json`](example/client.json) and
     { "tag": "olcrtc-out", "protocol": "olcrtc", "settings": {
         "provider": "wbstream", "transport": "vp8channel",
         "roomId": "https://meet.small-dm.ru/REPLACE_ROOM",
-        "key": "REPLACE_WITH_64_HEX",
-        "dnsServer": "8.8.8.8:53",
-        "deviceId": "alice@myapp"
+        "publicKey": "REPLACE_WITH_THE_SERVER_PUBLIC_KEY",
+        "uuid": "REPLACE_WITH_SUBSCRIPTION_UUID",
+        "deviceId": "alice-laptop",
+        "dnsServer": "8.8.8.8:53"
     } },
     { "tag": "direct", "protocol": "freedom" }
   ],
@@ -349,7 +399,7 @@ and the gRPC API your app drives:
     { "tag": "olcrtc-in", "protocol": "olcrtc", "settings": {
         "provider": "wbstream", "transport": "vp8channel",
         "roomId": "https://meet.small-dm.ru/REPLACE_ROOM",
-        "key": "REPLACE_WITH_64_HEX",
+        "privateKey": "REPLACE_WITH_THE_SERVER_PRIVATE_KEY",
         "dnsServer": "8.8.8.8:53"
     } }
   ],
@@ -363,7 +413,7 @@ and the gRPC API your app drives:
 ```
 
 Users are added at runtime per inbound tag (`vless-in`, `hy-in`, `olcrtc-in`)
-via `xray api adu` — see [Users & identity](#users--identity). The per‑user
+via `xray api adu` — see [Keys & identity](#keys--identity). The per‑user
 speed limit and online tracking apply uniformly across all three.
 
 ### Server: wbstream + vp8channel (guest flow, no data‑channel rights)
@@ -373,7 +423,7 @@ speed limit and online tracking apply uniformly across all three.
   "inbounds": [ { "tag": "olcrtc-in", "protocol": "olcrtc", "settings": {
       "provider": "wbstream", "transport": "vp8channel",
       "roomId": "REPLACE_ROOM_FROM_stream.wb.ru",
-      "key": "REPLACE_WITH_64_HEX",
+      "privateKey": "REPLACE_WITH_THE_SERVER_PRIVATE_KEY",
       "dnsServer": "8.8.8.8:53",
       "authToken": "OPTIONAL_WBSTREAM_TOKEN",
       "vp8": { "fps": 30, "batchSize": 64 }
@@ -408,9 +458,10 @@ out := &core.OutboundHandlerConfig{
         Provider:  "wbstream",
         Transport: "vp8channel",
         RoomId:    "https://meet.small-dm.ru/my-room",
-        Key:       key64hex,
+        PublicKey: serverPublicKey,
+        Uuid:      subscriptionUUID,
+        DeviceId:  "alice-laptop",
         DnsServer: "8.8.8.8:53",
-        DeviceId:  "alice@myapp",
     }),
 }
 // add `out` to core.Config.Outbound, plus a socks/dokodemo inbound, then core.New(cfg).
@@ -428,17 +479,25 @@ over yourself — if you want to drive the tunnel directly.
 
 ## Roadmap / planned follow‑ups
 
-- **Per‑user secret tokens** (instead of email‑as‑identity) and per‑device
-  counting: needs an olcrtc `Account` proto message + a client `userToken` field.
-  Straightforward given the offline `.pb.go` pipeline noted below.
-- **Server‑generated room key delivered via asymmetric crypto.** The room key
-  must be identical on both sides *before* any handshake (it encrypts the whole
-  channel), so it is provisioned **out‑of‑band** by your app, not negotiated
-  inside the tunnel. Recommended flow: the client generates a keypair and sends
-  its public key to your API; the server generates the room key once and returns
-  it **sealed to that public key**; the client unseals it into the outbound
-  `key`. A distinct room key *per user* would need per‑peer ciphers / trial
-  decryption in the transport — a larger change.
+Both of the entries that used to be here are done: per‑user credentials and
+per‑device counting, and a key that is negotiated rather than shared. See
+[Keys & identity](#keys--identity).
+
+What is left:
+
+- **Room health and failover.** The inbound joins one room and stays there. A
+  room that is blocked or that the provider retires takes the tunnel with it.
+  Wanted: a pool of rooms, a prober that tells `healthy` from `degraded` from
+  `blocked` (provider API answers but no media flows — the shape a DPI block
+  takes), hot standbys, and the status pushed to the panel so it can reissue
+  subscriptions.
+- **Several users per room in practice.** The cryptography no longer stands in
+  the way, and per‑peer routing exists on `vp8channel`. What has not been
+  measured is how many peers one room carries before the SFU itself becomes the
+  limit.
+- **A post‑quantum layer.** The exchange reserves a version byte inside its
+  encrypted payload precisely so ML‑KEM‑768 can be added alongside X25519
+  without the frame layout changing. Xray already vendors the primitive.
 
 ---
 

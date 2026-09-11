@@ -17,6 +17,12 @@ import (
 // of a user's traffic came through which inbound, because the profile *is* an
 // inbound.
 
+// DeviceAttribute is the session-content attribute a proxy sets when it knows
+// which device a connection came from, rather than leaving it to be inferred
+// from the source address. Namespaced so it cannot collide with a sniffer's
+// metadata.
+const DeviceAttribute = "fork:device"
+
 // UsageMeter is one connection's handle into whatever is accounting for
 // traffic. The dispatcher calls Count for every byte and Blocked before every
 // write; the policy store supplies the implementation.

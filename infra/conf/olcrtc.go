@@ -40,7 +40,6 @@ type olcrtcCommon struct {
 	Provider  string `json:"provider"`
 	Transport string `json:"transport"`
 	RoomID    string `json:"roomId"`
-	Key       string `json:"key"`
 	DNSServer string `json:"dnsServer"`
 	AuthToken string `json:"authToken"`
 
@@ -61,11 +60,24 @@ type olcrtcCommon struct {
 // OLCRTCServerConfig is the JSON config for the olcrtc inbound (server).
 type OLCRTCServerConfig struct {
 	olcrtcCommon
+	// PrivateKey is the server's long-term X25519 key, as produced by
+	// `xray x25519`. Clients carry only its public half.
+	PrivateKey string `json:"privateKey"`
 }
 
 // OLCRTCClientConfig is the JSON config for the olcrtc outbound (client).
 type OLCRTCClientConfig struct {
 	olcrtcCommon
+	// PublicKey is the server's long-term X25519 public key. Holding it proves
+	// nothing — it is not a secret — so a leaked client config does not let
+	// anyone read anyone else's traffic, which a shared room key did.
+	PublicKey string `json:"publicKey"`
+	// UUID is the subscription this client belongs to, resolved against the
+	// inbound's user list.
+	UUID string `json:"uuid"`
+	// DeviceID names the machine, so one subscription used from several
+	// devices can be counted and capped. Generated and persisted at
+	// DeviceIDPath when left empty.
 	DeviceID     string `json:"deviceId"`
 	DeviceIDPath string `json:"deviceIdPath"`
 }
@@ -103,9 +115,6 @@ func (c *olcrtcCommon) validate() error {
 		return errors.New("olcrtc: transport ", c.Transport,
 			" is not supported by this build (use vp8channel or seichannel)")
 	}
-	if c.Key == "" {
-		return errors.New("olcrtc: key is required (64 hex chars)")
-	}
 	return nil
 }
 
@@ -138,11 +147,14 @@ func (c *OLCRTCServerConfig) Build() (proto.Message, error) {
 	vfps, vbatch := c.vp8()
 	sfps, sbatch, sfrag, sack := c.sei()
 	v := c.video()
+	if c.PrivateKey == "" {
+		return nil, errors.New("olcrtc: privateKey is required (generate one with `xray x25519`)")
+	}
 	return &olcrtc.ServerConfig{
 		Provider:           c.Provider,
 		Transport:          c.Transport,
 		RoomId:             c.RoomID,
-		Key:                c.Key,
+		PrivateKey:         c.PrivateKey,
 		DnsServer:          c.DNSServer,
 		AuthToken:          c.AuthToken,
 		Engine:             c.Engine,
@@ -179,11 +191,14 @@ func (c *OLCRTCClientConfig) Build() (proto.Message, error) {
 	vfps, vbatch := c.vp8()
 	sfps, sbatch, sfrag, sack := c.sei()
 	v := c.video()
+	if c.PublicKey == "" {
+		return nil, errors.New("olcrtc: publicKey is required (the server's public key)")
+	}
 	return &olcrtc.ClientConfig{
 		Provider:           c.Provider,
 		Transport:          c.Transport,
 		RoomId:             c.RoomID,
-		Key:                c.Key,
+		PublicKey:          c.PublicKey,
 		DnsServer:          c.DNSServer,
 		AuthToken:          c.AuthToken,
 		Engine:             c.Engine,
@@ -211,5 +226,6 @@ func (c *OLCRTCClientConfig) Build() (proto.Message, error) {
 		MaxSessionDuration: c.MaxSessionDuration,
 		DeviceId:           c.DeviceID,
 		DeviceIdPath:       c.DeviceIDPath,
+		Uuid:               c.UUID,
 	}, nil
 }

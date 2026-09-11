@@ -11,8 +11,10 @@
 //     Xray's router (so routing, DNS, sniffing and stats all apply).
 //
 // Traffic is disguised as an ordinary video call on an allowed SFU service
-// (Yandex Telemost, WbStream) and additionally encrypted with a shared
-// XChaCha20-Poly1305 key.
+// (Yandex Telemost, WbStream) and additionally encrypted end-to-end. The
+// server holds a long-term X25519 key pair and clients carry only its public
+// half; every connection negotiates a session key of its own before anything
+// else flows, so participants sharing a room cannot read each other.
 //
 // The library itself is vendored under olcrtclib and kept in step with its
 // upstream by fork/bin/olcrtc; this package talks to it only through the
@@ -62,7 +64,7 @@ func clientConfig(c *ClientConfig) (olclient.Config, error) {
 		Transport:        c.GetTransport(),
 		Provider:         c.GetProvider(),
 		RoomURL:          c.GetRoomId(),
-		KeyHex:           c.GetKey(),
+		ServerPublicKey:  c.GetPublicKey(),
 		DNSServer:        c.GetDnsServer(),
 		ProviderToken:    c.GetAuthToken(),
 		Engine:           c.GetEngine(),
@@ -72,6 +74,7 @@ func clientConfig(c *ClientConfig) (olclient.Config, error) {
 		Liveness:         olclient.LivenessConfig(liveness),
 		DeviceID:         c.GetDeviceId(),
 		DeviceIDPath:     c.GetDeviceIdPath(),
+		Claims:           clientClaims(c),
 	}, nil
 }
 
@@ -85,7 +88,7 @@ func serverConfig(c *ServerConfig) (oltunnel.Config, error) {
 		Transport:        c.GetTransport(),
 		Provider:         c.GetProvider(),
 		RoomURL:          c.GetRoomId(),
-		KeyHex:           c.GetKey(),
+		PrivateKey:       c.GetPrivateKey(),
 		DNSServer:        c.GetDnsServer(),
 		ProviderToken:    c.GetAuthToken(),
 		Engine:           c.GetEngine(),
@@ -180,6 +183,23 @@ func serverTransportOptions(c *ServerConfig) oltunnel.TransportOptions {
 		return nil
 	}
 }
+
+// clientClaims carries the client's credential to the server's auth hook.
+//
+// It travels in the handshake on the first smux stream, which is already
+// encrypted with the session key the exchange produced — so unlike a
+// credential placed in the opening frame, it stays secret even from someone
+// who later obtains the server's private key.
+func clientClaims(c *ClientConfig) map[string]any {
+	if c.GetUuid() == "" {
+		return nil
+	}
+	return map[string]any{claimUUID: c.GetUuid()}
+}
+
+// claimUUID is the handshake claim naming the subscription a client belongs
+// to. The server resolves it against its user list.
+const claimUUID = "uuid"
 
 // Transport names, as they appear in the JSON config.
 const (

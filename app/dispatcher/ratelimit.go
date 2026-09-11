@@ -207,6 +207,15 @@ func wrapUser(ctx context.Context, w buf.Writer, dir shaper.Direction, flow *sha
 // Protocols that carry a real device identifier can do better; olcRTC's
 // handshake already has one.
 func deviceKey(ctx context.Context) string {
+	// A protocol that knows which machine it is talking to says so, and that
+	// beats guessing. olcRTC carries a device identifier in its handshake, so
+	// its connections are told apart properly rather than collapsing into one
+	// device because they all arrive without a source address.
+	if c := session.ContentFromContext(ctx); c != nil {
+		if device := c.Attribute(DeviceAttribute); device != "" {
+			return device
+		}
+	}
 	if inb := session.InboundFromContext(ctx); inb != nil && inb.Source.Address != nil {
 		return inb.Source.Address.String()
 	}

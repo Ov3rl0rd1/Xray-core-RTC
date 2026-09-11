@@ -77,15 +77,17 @@ type TrafficConfig struct {
 
 // Config holds all client tunnel capabilities.
 type Config struct {
-	Transport        string
-	Provider         string
-	RoomURL          string
-	ChannelID        string
-	Engine           string
-	URL              string
-	Token            string
-	ProviderToken    string
-	KeyHex           string
+	Transport     string
+	Provider      string
+	RoomURL       string
+	ChannelID     string
+	Engine        string
+	URL           string
+	Token         string
+	ProviderToken string
+	KeyHex        string
+	// ServerPublicKey selects the key exchange instead of a shared secret.
+	ServerPublicKey  string
 	LocalAddr        string
 	SOCKSUser        string
 	SOCKSPass        string
@@ -139,7 +141,8 @@ func toClientConfig(cfg Config) internalclient.Config {
 	return internalclient.Config{
 		Transport: cfg.Transport, Provider: cfg.Provider, RoomURL: cfg.RoomURL,
 		ChannelID: cfg.ChannelID, Engine: cfg.Engine, URL: cfg.URL, Token: cfg.Token,
-		ProviderToken: cfg.ProviderToken, KeyHex: cfg.KeyHex, LocalAddr: cfg.LocalAddr,
+		ProviderToken: cfg.ProviderToken, KeyHex: cfg.KeyHex,
+		ServerPublicKey: cfg.ServerPublicKey, LocalAddr: cfg.LocalAddr,
 		SOCKSUser: cfg.SOCKSUser, SOCKSPass: cfg.SOCKSPass, DNSServer: cfg.DNSServer,
 		Resolver: cfg.Resolver, TransportOptions: toTransportOptions(cfg.TransportOptions),
 		Liveness: control.Config{

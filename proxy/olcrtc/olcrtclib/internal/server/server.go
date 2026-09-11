@@ -4,7 +4,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -12,7 +11,6 @@ import (
 	"github.com/xtaci/smux"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/control"
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/handshake"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/muxconn"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
@@ -44,12 +42,13 @@ type HealthFunc func(control.Status)
 
 // Server handles incoming tunnel connections and proxies their traffic.
 type Server struct {
-	baseCtx context.Context //nolint:containedctx // server-lifetime context for reconnect goroutines
-	ln      transport.Transport
-	peerLn  transport.PeerTransport
-	keys    *crypto.KeySet
-	pair    *tunnelcore.SessionPair
-	conn    *muxconn.Conn
+	baseCtx  context.Context //nolint:containedctx // server-lifetime context for reconnect goroutines
+	ln       transport.Transport
+	peerLn   transport.PeerTransport
+	keys     muxconn.Keys
+	keyStore *keyStore
+	pair     *tunnelcore.SessionPair
+	conn     *muxconn.Conn
 
 	controlConn *muxconn.Conn
 	session     *smux.Session
@@ -88,11 +87,16 @@ type Server struct {
 
 // Config holds runtime configuration for [Run].
 type Config struct {
-	Transport        string
-	Provider         string
-	RoomURL          string
-	ChannelID        string
-	KeyHex           string
+	Transport string
+	Provider  string
+	RoomURL   string
+	ChannelID string
+	KeyHex    string
+	// PrivateKey selects the fork's key exchange instead of a shared secret:
+	// each peer negotiates a session key of its own against this key's public
+	// half, so participants in one room can no longer read each other. Set it
+	// and KeyHex is ignored. See fork_keys.go.
+	PrivateKey       string
 	DNSServer        string
 	Resolver         *net.Resolver
 	SOCKSProxyAddr   string
@@ -121,9 +125,9 @@ type Config struct {
 func Run(ctx context.Context, cfg Config) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	keys, err := tunnelcore.SetupKeySet(cfg.KeyHex, crypto.Server)
+	keys, keyStore, err := serverKeys(cfg)
 	if err != nil {
-		return fmt.Errorf("setup key set: %w", err)
+		return err
 	}
 	hook := cfg.AuthHook
 	if hook == nil {
@@ -142,7 +146,7 @@ func Run(ctx context.Context, cfg Config) error {
 		onTraffic = func(string, string, uint64, uint64) {}
 	}
 	s := &Server{
-		keys: keys, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
+		keys: keys, keyStore: keyStore, authHook: hook, onOpen: onOpen, onClose: onClose, onTraffic: onTraffic,
 		dialHook:  cfg.DialHook,
 		dnsServer: cfg.DNSServer, resolver: tunnelcore.Resolver(cfg.Resolver, cfg.DNSServer),
 		socksProxyAddr: cfg.SOCKSProxyAddr, socksProxyPort: cfg.SOCKSProxyPort,

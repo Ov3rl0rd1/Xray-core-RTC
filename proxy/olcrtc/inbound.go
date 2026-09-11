@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -84,22 +85,33 @@ func (s *Server) Serve(ctx context.Context) error {
 	return nil
 }
 
-// authHook authenticates a client handshake. The client presents its identity as
-// the handshake device token (the outbound's deviceId). When no users are
-// registered the inbound runs in "open mode" — the shared room key is the only
-// gate. Once users exist, the token must match a registered user or the
-// handshake is rejected. On success it returns a sessionID that encodes the
-// resolved user so dispatch can attach it without shared state.
-func (s *Server) authHook(deviceID string, _ map[string]any) (string, error) {
+// authHook authorises a client handshake.
+//
+// Two identities arrive, and they mean different things. The claim named
+// "uuid" is the *credential*: it says which subscription this is, and the
+// inbound resolves it against its user list. deviceID is the *machine*: it
+// says which of that subscription's devices is calling, and is what device
+// caps and the fair split between devices are counted over.
+//
+// Both travel inside the handshake on the first smux stream, which by then is
+// already encrypted with the session key the exchange produced — so neither is
+// recoverable from recorded traffic, even by someone who later obtains the
+// server's private key.
+//
+// With no users registered the inbound is open: anyone who completed the key
+// exchange gets in, which is the right behaviour for a server whose panel has
+// not provisioned it yet. Once a single user exists, the list is enforced.
+func (s *Server) authHook(deviceID string, claims map[string]any) (string, error) {
 	if s.validator.Empty() {
-		return encodeSessionID("", 0), nil
+		return encodeSessionID("", 0, deviceID), nil
 	}
-	u := s.validator.Get(deviceID)
+	credential, _ := claims[claimUUID].(string)
+	u := s.validator.Get(credential)
 	if u == nil {
-		// Reason is forwarded to the client verbatim; keep it non-specific.
+		// The reason reaches the client verbatim; keep it uninformative.
 		return "", errors.New("unauthorized")
 	}
-	return encodeSessionID(u.Email, u.Level), nil
+	return encodeSessionID(u.Email, u.Level, deviceID), nil
 }
 
 // dispatch routes a single tunnel target through Xray and returns a net.Conn
@@ -113,16 +125,24 @@ func (s *Server) dispatch(ctx context.Context, addr string, port int, sessionID 
 		Tag:    s.tag,
 		Source: net.TCPDestination(net.AnyIP, 0),
 	}
-	if email, level := decodeSessionID(sessionID); email != "" {
+	email, level, device := decodeSessionID(sessionID)
+	if email != "" {
 		// Attaching the user makes the dispatcher key per-user traffic stats,
-		// online tracking and the speed limit by email — across every device.
-		// Online tracking counters are themselves per-email, so Source stays a
-		// plain IP (routing may inspect it); per-device granularity is a planned
-		// follow-up tied to per-user secrets.
+		// online tracking, quotas and the speed limit by email — across every
+		// device and every protocol.
 		inb.User = &protocol.MemoryUser{Email: email, Level: level}
 	}
 	ctx = session.ContextWithInbound(ctx, inb)
-	ctx = session.ContextWithContent(ctx, new(session.Content))
+
+	content := new(session.Content)
+	if device != "" {
+		// olcRTC connections carry no source address, so without this every one
+		// of a user's devices would look like the same device to the fair split
+		// and to device caps. The handshake knows which machine this is, so it
+		// says so rather than leaving it to be guessed.
+		content.SetAttribute(dispatcher.DeviceAttribute, device)
+	}
+	ctx = session.ContextWithContent(ctx, content)
 
 	errors.LogInfo(ctx, "olcrtc: dispatching tunnel target ", dest)
 	link, err := s.dispatcher.Dispatch(ctx, dest)
@@ -180,38 +200,47 @@ func (s *Server) GetUsersCount(_ context.Context) int64 {
 
 // --- sessionID codec -------------------------------------------------------
 //
-// The vendored server hands the AuthHook-returned sessionID to the dial hook for
-// every tunnel stream of a connection. We use it as a stateless carrier for the
-// authenticated identity: "u1:<base64url(email)>:<level>:<uuid>". The trailing
-// uuid keeps each connection's sessionID unique (the server tracks peers by it),
-// while the prefix lets dispatch recover the user with no shared map.
+// The vendored server hands the AuthHook-returned sessionID to the dial hook
+// for every tunnel stream of a connection, so it doubles as a stateless
+// carrier for who that connection belongs to:
+//
+//	u2:<base64url(email)>:<level>:<base64url(device)>:<random>
+//
+// The trailing random keeps each connection's sessionID unique, which the
+// library relies on to tell peers apart; the prefix lets dispatch recover the
+// identity with no shared map and no lock on the connection path.
 
-const sessionUserPrefix = "u1:"
+const sessionUserPrefix = "u2:"
 
-func encodeSessionID(email string, level uint32) string {
+func encodeSessionID(email string, level uint32, device string) string {
 	id := uuid.New()
-	if email == "" {
+	if email == "" && device == "" {
 		return "anon:" + id.String()
 	}
 	return sessionUserPrefix +
 		base64.RawURLEncoding.EncodeToString([]byte(email)) + ":" +
-		strconv.FormatUint(uint64(level), 10) + ":" + id.String()
+		strconv.FormatUint(uint64(level), 10) + ":" +
+		base64.RawURLEncoding.EncodeToString([]byte(device)) + ":" + id.String()
 }
 
-func decodeSessionID(sid string) (email string, level uint32) {
+func decodeSessionID(sid string) (email string, level uint32, device string) {
 	if !strings.HasPrefix(sid, sessionUserPrefix) {
-		return "", 0
+		return "", 0, ""
 	}
-	parts := strings.SplitN(strings.TrimPrefix(sid, sessionUserPrefix), ":", 3)
-	if len(parts) != 3 {
-		return "", 0
+	parts := strings.SplitN(strings.TrimPrefix(sid, sessionUserPrefix), ":", 4)
+	if len(parts) != 4 {
+		return "", 0, ""
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	rawEmail, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", 0
+		return "", 0, ""
+	}
+	rawDevice, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", 0, ""
 	}
 	lvl, _ := strconv.ParseUint(parts[1], 10, 32)
-	return string(raw), uint32(lvl)
+	return string(rawEmail), uint32(lvl), string(rawDevice)
 }
 
 // linkCloser tears down a dispatched link when the tunnel conn is closed.

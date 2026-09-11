@@ -7,7 +7,6 @@ import (
 
 	"github.com/xtaci/smux"
 
-	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/muxconn"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/runtime"
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/transport"
@@ -36,7 +35,7 @@ type SessionPair struct {
 
 // NewSessionPair builds data and optional isolated-control muxconn/smux sessions.
 // If only the control session fails, the usable data pair is returned with the error.
-func NewSessionPair(tr transport.Transport, keys *crypto.KeySet, role SessionRole) (*SessionPair, error) {
+func NewSessionPair(tr transport.Transport, keys muxconn.Keys, role SessionRole) (*SessionPair, error) {
 	dataConn := muxconn.New(tr, keys)
 	controlConn := muxconn.NewControl(tr, keys)
 	return NewSessionPairWithConns(tr, dataConn, controlConn, role)
@@ -79,7 +78,7 @@ func NewSessionPairWithConns(
 // NewControlSession builds only an isolated control muxconn/smux session.
 func NewControlSession(
 	tr transport.Transport,
-	keys *crypto.KeySet,
+	keys muxconn.Keys,
 	role SessionRole,
 ) (*muxconn.Conn, *smux.Session, error) {
 	conn := muxconn.NewControl(tr, keys)

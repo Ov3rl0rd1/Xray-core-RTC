@@ -18,9 +18,10 @@
         "provider": "wbstream",
         "transport": "vp8channel",
         "roomId": "REPLACE_WITH_ROOM_ID",
-        "key": "bb6e7f9254053f5de1442edc55934d4872eb8ad287230df2f29c1d766dd4b07c",
-        "dnsServer": "8.8.8.8:53",
-        "deviceId": "alice@myapp"
+        "publicKey": "REPLACE_WITH_PUBLIC_KEY_FROM_xray_x25519",
+        "uuid": "REPLACE_WITH_SUBSCRIPTION_UUID",
+        "deviceId": "alice-laptop",
+        "dnsServer": "8.8.8.8:53"
       }
     },
     { "tag": "direct", "protocol": "freedom" }

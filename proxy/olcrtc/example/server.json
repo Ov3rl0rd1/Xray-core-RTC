@@ -8,7 +8,7 @@
         "provider": "wbstream",
         "transport": "vp8channel",
         "roomId": "REPLACE_WITH_ROOM_ID",
-        "key": "REPLACE_WITH_64_HEX_CHARS",
+        "privateKey": "REPLACE_WITH_PRIVATE_KEY_FROM_xray_x25519",
         "dnsServer": "8.8.8.8:53"
       }
     }

@@ -126,6 +126,25 @@ cmd_vendor() {
         fi
     done < <(our_paths)
 
+    # Before anything is deleted: is there a file here that upstream does not
+    # have and the manifest does not claim? That is a fork file somebody forgot
+    # to list, and replacing the tree would take it with no trace. Refusing is
+    # the only safe answer — the alternative is silently losing work, which is
+    # exactly what happened twice before this check existed.
+    local orphans=""
+    while IFS= read -r -d '' file; do
+        local rel="${file#"$VENDOR_DIR"/}"
+        [ -e "$tmp/src/$rel" ] && continue
+        is_ours "$rel" && continue
+        skipped "$rel" && continue
+        orphans="$orphans $rel"
+    done < <(find "$VENDOR_DIR" -name '*.go' -print0)
+    if [ -n "$orphans" ]; then
+        warn "these files are not upstream's and not in the manifest:"
+        for f in $orphans; do printf '    %s\n' "$f" >&2; done
+        die "add them to $MANIFEST as '=' entries, or delete them, then try again"
+    fi
+
     # Replace each vendored root wholesale. Anything upstream deleted has to
     # disappear here too, which copying over the top would never achieve.
     while IFS= read -r path; do
@@ -289,6 +308,17 @@ cmd_diff() {
     done < <(vendored_paths)
 
     printf '\n  %d changed, %d gone, %d new\n' "$changed" "$gone" "$added"
+}
+
+# is_ours reports whether the manifest claims a path, either directly or as
+# something under a directory it claims.
+is_ours() {
+    local rel="$1"
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        case "$rel" in "$path"|"$path"/*) return 0;; esac
+    done < <(our_paths)
+    return 1
 }
 
 skipped() {

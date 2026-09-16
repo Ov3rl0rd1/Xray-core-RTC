@@ -9,8 +9,10 @@ import (
 	"testing"
 )
 
-const testSessionID = "sess-42"
-const testPeerID = "1234abcd"
+const (
+	testSessionID = "sess-42"
+	testPeerID    = "1234abcd"
+)
 
 var errNope = errors.New("nope")
 

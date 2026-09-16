@@ -63,15 +63,21 @@ func TestWindowBoundsAlignToTheCalendar(t *testing.T) {
 		w                  Window
 		wantStart, wantEnd time.Time
 	}{
-		{Window_WINDOW_DAY,
+		{
+			Window_WINDOW_DAY,
 			time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC),
-			time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC)},
-		{Window_WINDOW_WEEK, // ISO weeks start Monday
+			time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			Window_WINDOW_WEEK, // ISO weeks start Monday
 			time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC),
-			time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)},
-		{Window_WINDOW_MONTH,
+			time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			Window_WINDOW_MONTH,
 			time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
-			time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
+			time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		},
 	}
 	for _, c := range cases {
 		start, end := windowBounds(c.w, at)

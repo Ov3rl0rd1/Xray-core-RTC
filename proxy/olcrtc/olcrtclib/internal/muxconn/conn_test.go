@@ -41,6 +41,7 @@ func (s *stubLink) Send(data []byte) error {
 	s.sent = append(s.sent, append([]byte(nil), data...))
 	return s.sendErr
 }
+
 func (s *stubLink) CanSend() bool {
 	if s.canSendFn != nil {
 		return s.canSendFn()
@@ -49,6 +50,7 @@ func (s *stubLink) CanSend() bool {
 	defer s.mu.Unlock()
 	return s.canSend
 }
+
 func (s *stubLink) SendTo(peerID string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,6 +83,7 @@ func (l *loopLink) Send(data []byte) error {
 	}
 	return nil
 }
+
 func (l *loopLink) ControlSend(data []byte) error {
 	if l.peer.controlOnData != nil {
 		l.peer.controlOnData(bytes.Clone(data))

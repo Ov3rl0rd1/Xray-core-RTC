@@ -191,18 +191,30 @@ jobs:
 
           # One issue per upstream release, reused across re-runs, so a weekly
           # schedule cannot bury the repo in duplicates.
-          EXISTING="$(gh issue list --state open --label upstream-update \
-                        --search "$REF in:title" --json number,title \
-                        --jq ".[] | select(.title | contains(\"$REF\")) | .number" | head -1)"
+          # Ensure the label exists before using --label.
+          gh label create upstream-update \
+            --color 1d76db \
+            --description "Automated upstream tracking" \
+            --force || true
 
-          gh label create upstream-update --color 1d76db \
-            --description "Automated upstream tracking" 2>/dev/null || true
+          EXISTING="$(
+            gh issue list \
+              --state open \
+              --label upstream-update \
+              --search "$REF in:title" \
+              --json number,title \
+              --jq ".[] | select(.title | contains(\"$REF\")) | .number" \
+              2>/dev/null || true
+          )"
 
           if [ -n "$EXISTING" ]; then
             echo "Updating issue #$EXISTING"
             gh issue comment "$EXISTING" --body-file /tmp/body.md
           else
-            gh issue create --title "$TITLE" --label upstream-update --body-file /tmp/body.md
+            gh issue create \
+              --title "$TITLE" \
+              --label upstream-update \
+              --body-file /tmp/body.md
           fi
 
       - name: Fail the run when the fork does not survive

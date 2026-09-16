@@ -185,20 +185,20 @@ jobs:
         if: steps.decide.outputs.up_to_date == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TITLE="${{ steps.report.outputs.title }}"
           REF="${{ steps.decide.outputs.ref }}"
 
-          # One issue per upstream release, reused across re-runs, so a weekly
-          # schedule cannot bury the repo in duplicates.
-          # Ensure the label exists before using --label.
           gh label create upstream-update \
+            --repo "$GH_REPO" \
             --color 1d76db \
             --description "Automated upstream tracking" \
-            --force || true
+            --force
 
           EXISTING="$(
             gh issue list \
+              --repo "$GH_REPO" \
               --state open \
               --label upstream-update \
               --search "$REF in:title" \
@@ -209,14 +209,17 @@ jobs:
 
           if [ -n "$EXISTING" ]; then
             echo "Updating issue #$EXISTING"
-            gh issue comment "$EXISTING" --body-file /tmp/body.md
+            gh issue comment "$EXISTING" \
+              --repo "$GH_REPO" \
+              --body-file /tmp/body.md
           else
             gh issue create \
+              --repo "$GH_REPO" \
               --title "$TITLE" \
               --label upstream-update \
               --body-file /tmp/body.md
           fi
-
+          
       - name: Fail the run when the fork does not survive
         if: steps.decide.outputs.up_to_date == 'false'
         # The issue is the deliverable, but a red run is what shows up in the

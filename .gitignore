@@ -69,3 +69,4 @@ ehthumbs.db
 xray-android-amd64
 xray-android-arm64
 test-configs/
+client.json

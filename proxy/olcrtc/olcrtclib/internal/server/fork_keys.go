@@ -75,7 +75,7 @@ func (k *keyStore) get(peerID string) *keyexchange.ServerKeys {
 	defer k.mu.Unlock()
 	keys := k.keys[peerID]
 	if keys == nil {
-		keys = keyexchange.NewServerKeys(k.responder)
+		keys = keyexchange.NewServerKeys(k.responder, peerID)
 		k.keys[peerID] = keys
 	}
 	return keys

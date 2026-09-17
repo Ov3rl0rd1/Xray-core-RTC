@@ -266,8 +266,9 @@ Xray already ships:
 
 ```bash
 xray x25519
-# Private key: <goes in the inbound's privateKey>
-# Public key:  <goes in every client's publicKey>
+# PrivateKey: <goes in the inbound's privateKey>
+# Password (PublicKey): <goes in every client's publicKey>
+# (Hash32 belongs to REALITY; ignore it here)
 ```
 
 Before anything else flows, two frames establish a key for that connection
@@ -292,6 +293,33 @@ distribute.
 Compromising the server's private key later does not open recorded sessions:
 that yields one of the two shared secrets, and the session key needs both — the
 other requires an ephemeral private key both sides discard.
+
+### On the wire
+
+The exchange runs on the transport's **control channel** — the one upstream
+already uses for its handshake — and on vp8channel it has to: a client there
+discards everything on its data channel until the handshake has told it which
+participant is the server, and the handshake needs the key. seichannel has a
+single channel and uses that.
+
+The client resends its opening frame every 2 s until it is answered, for up to
+25 s. It resends the **same** frame, and the server answers a copy it has
+already seen with the same answer, so however many copies cross a slow or lossy
+path, both ends arrive at one key. The server also remembers every opening
+frame it has accepted (for the ten minutes a frame's timestamp could still pass),
+so another participant in the room cannot replay a client's frame to move the
+server off the key that client holds.
+
+What to look for in the logs:
+
+| Line | Where | Means |
+|---|---|---|
+| `server public key: <key>` | server, at startup | the key clients must carry — compare it with their `publicKey` |
+| `olcrtc: session key negotiated peer=<id>` | server | a client completed the exchange |
+| `olcrtc: session key negotiated` | client | the server's answer arrived |
+| `muxconn: decrypt failed len=57: olcrtc: not a key exchange frame` | server | a client is configured with **another server's** public key |
+| `... key exchange timestamp outside the accepted window` | server | the client's clock is more than 5 minutes off |
+| `olcrtc: key exchange failed: ... did not answer within 25s` | client | nothing came back — wrong key, wrong room, or the server is down; the connection then fails with `handshake: open control stream: encrypt: ...` |
 
 ### Two identities, and why they are separate
 

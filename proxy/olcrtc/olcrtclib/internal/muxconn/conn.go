@@ -158,9 +158,23 @@ type Keys interface {
 //
 // aad identifies which plane the send path belongs to — the same value the
 // conn passes to SealInto and OpenInto — so a Keys handed both the data and
-// the control conn can answer on whichever one a record arrived from.
+// the control conn can answer on whichever one a record arrived from. control
+// marks the transport's isolated control plane, which a transport may deliver
+// before it has authenticated the peer when it delivers nothing else.
 type Binder interface {
-	Bind(aad []byte, send func([]byte) error, canSend func() bool)
+	Bind(aad []byte, control bool, send func([]byte) error, canSend func() bool)
+}
+
+// consumedRecord is implemented by an error OpenInto returns for a record that
+// was addressed to the Keys itself rather than to the stream. Push drops such a
+// record without counting it as a decryption failure.
+type consumedRecord interface {
+	ConsumedRecord() bool
+}
+
+func isConsumed(err error) bool {
+	var consumed consumedRecord
+	return errors.As(err, &consumed) && consumed.ConsumedRecord()
 }
 
 // bindKeys hands the conn's send path to a Keys that asked for it.
@@ -170,7 +184,7 @@ func bindKeys(c *Conn) *Conn {
 		if canSend == nil {
 			canSend = c.ln.CanSend
 		}
-		b.Bind(c.aad, c.send, canSend)
+		b.Bind(c.aad, string(c.aad) == controlRecordAAD, c.send, canSend)
 	}
 	return c
 }
@@ -299,7 +313,9 @@ func (c *Conn) Push(ciphertext []byte) {
 	pt, err := c.keys.OpenInto(*bufPtr, ciphertext, c.aad)
 	if err != nil {
 		releaseFrameBuf(bufPtr)
-		c.noteDecryptFailure(len(ciphertext), err)
+		if !isConsumed(err) {
+			c.noteDecryptFailure(len(ciphertext), err)
+		}
 		return
 	}
 	*bufPtr = pt

@@ -67,6 +67,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -95,11 +96,19 @@ const (
 
 // MaxClockSkew bounds how far a client's timestamp may be from the server's.
 //
-// It is the only replay protection here, and it is enough: replaying a
-// recorded first frame makes the server generate a *fresh* ephemeral, so the
-// resulting session key is one the replayer cannot derive. The window exists
-// to bound the pointless work, not to prevent a break.
+// Replaying a recorded first frame could never break a session's
+// confidentiality: the server answers with a fresh ephemeral, so the key it
+// arrives at is one the replayer cannot derive. What a replay could do is make
+// the server switch the victim's session to that key, which cuts the victim
+// off. So the server also remembers every opening frame it accepted, and the
+// window is what keeps that memory bounded: a frame older than this is refused
+// on its timestamp alone, so it no longer needs remembering.
 const MaxClockSkew = 5 * time.Minute
+
+// maxRemembered caps the replay memory. Reaching it takes tens of thousands of
+// valid exchanges inside one skew window; past it the oldest are forgotten
+// first, which reopens a replay window for them rather than refusing everyone.
+const maxRemembered = 1 << 16
 
 // Errors reported by this package. They are deliberately coarse on the server
 // side: a peer that fails to authenticate learns only that it failed.
@@ -113,6 +122,10 @@ var (
 	ErrVersion = errors.New("olcrtc: unsupported key exchange version")
 	// ErrClockSkew is returned when a client's timestamp is too far off.
 	ErrClockSkew = errors.New("olcrtc: key exchange timestamp outside the accepted window")
+	// ErrReplay is returned when an opening frame has already been accepted
+	// once. A client that did not hear the answer resends the same frame, and
+	// ServerKeys answers that itself before it ever gets here.
+	ErrReplay = errors.New("olcrtc: key exchange frame replayed")
 )
 
 // Salts separate the three derived keys. Distinct salts mean that learning one
@@ -260,11 +273,13 @@ func (i *Initiator) Complete(reply []byte) ([]byte, error) {
 	return sessionKey(shared, transcript)
 }
 
-// Responder is the server half. One Responder serves every exchange, because
-// the only long-lived thing it holds is the static key; each exchange's
-// ephemeral is generated inside Accept.
+// Responder is the server half. One Responder serves every exchange: the
+// long-lived things it holds are the static key and the memory of which
+// opening frames it has already answered. Each exchange's ephemeral is
+// generated inside Accept.
 type Responder struct {
 	static *ecdh.PrivateKey
+	seen   replayMemory
 }
 
 // NewResponder wraps a server private key.
@@ -288,6 +303,9 @@ func (r *Responder) PublicKey() string {
 // server tries a frame as data first and falls back to here, so a frame that
 // is neither simply produces ErrBadFrame and is dropped. Nothing about the
 // failure distinguishes a stray peer's noise from a wrong key.
+//
+// Each frame is accepted once. A second copy is refused with ErrReplay, so
+// whoever answers retransmissions has to keep the first answer around.
 func (r *Responder) Accept(frame []byte, now time.Time) (reply, key []byte, err error) {
 	if len(frame) != InitSize {
 		return nil, nil, ErrBadFrame
@@ -322,6 +340,11 @@ func (r *Responder) Accept(frame []byte, now time.Time) (reply, key []byte, err 
 	if skew := now.Sub(sent); skew > MaxClockSkew || skew < -MaxClockSkew {
 		return nil, nil, fmt.Errorf("%w: off by %s", ErrClockSkew, skew.Round(time.Second))
 	}
+	// Only now, with the frame authenticated and inside the window, is it
+	// worth remembering: noise cannot fill the memory.
+	if !r.seen.remember([KeySize]byte(ePub), now) {
+		return nil, nil, ErrReplay
+	}
 
 	serverEphemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -348,6 +371,51 @@ func (r *Responder) Accept(frame []byte, now time.Time) (reply, key []byte, err 
 		return nil, nil, err
 	}
 	return reply, key, nil
+}
+
+// replayMemory records the client ephemerals of accepted opening frames.
+//
+// Entries are kept in arrival order, so expiring them is a walk from the front.
+// Arrival time rather than the client's own timestamp decides expiry because it
+// is monotonic: a frame's timestamp is within MaxClockSkew of its arrival, so
+// once twice that has passed the frame is refused on its timestamp anyway.
+type replayMemory struct {
+	mu    sync.Mutex
+	index map[[KeySize]byte]struct{}
+	order []remembered
+}
+
+type remembered struct {
+	key [KeySize]byte
+	at  time.Time
+}
+
+// remember records key and reports whether it was new.
+func (m *replayMemory) remember(key [KeySize]byte, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cutoff := now.Add(-2 * MaxClockSkew)
+	expired := 0
+	for expired < len(m.order) && m.order[expired].at.Before(cutoff) {
+		delete(m.index, m.order[expired].key)
+		expired++
+	}
+	m.order = m.order[expired:]
+
+	if _, seen := m.index[key]; seen {
+		return false
+	}
+	if len(m.order) >= maxRemembered {
+		delete(m.index, m.order[0].key)
+		m.order = m.order[1:]
+	}
+	if m.index == nil {
+		m.index = make(map[[KeySize]byte]struct{})
+	}
+	m.index[key] = struct{}{}
+	m.order = append(m.order, remembered{key: key, at: now})
+	return true
 }
 
 // derive turns a shared secret into the AEAD and nonce for one frame.

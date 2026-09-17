@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/crypto"
+	"github.com/xtls/xray-core/proxy/olcrtc/olcrtclib/internal/logger"
 )
 
 // This file plugs the exchange into the tunnel. Both types here implement
@@ -15,11 +16,30 @@ import (
 // records are still sealed and opened by something holding a key. The
 // difference is that the key arrives on the wire rather than from the config.
 //
-// The exchange frames travel on the same channel as everything else and are
-// recognised by failing to open as data records — which costs nothing, because
-// muxconn already drops records it cannot open (a room full of unrelated
-// participants guarantees a steady supply of those) and only logs a
-// rate-limited summary.
+// The exchange frames travel on the same channels as everything else and are
+// recognised by failing to open as data records.
+//
+// # Which channel
+//
+// A transport with an isolated control channel (vp8channel) runs the exchange
+// there and nowhere else. That is not a preference, it is the only thing that
+// works: such a client discards everything arriving on its data channel until
+// the handshake has told it which participant is the server, and the handshake
+// needs the key this exchange produces. The control channel is the one the
+// transport delivers before that point, because it is the one upstream runs its
+// handshake over. A transport with a single channel simply uses that.
+//
+// # Retransmission
+//
+// The first frames across a freshly negotiated media path are routinely lost,
+// so the client resends its opening frame until it is answered. It resends the
+// same frame, not a new one. The server keeps one key per peer, so every fresh
+// opening frame would replace it, and a client that accepted the answer to an
+// earlier one would be left holding a key the server had already discarded. On
+// a path whose round trip exceeds the resend interval that would never
+// converge. With one frame per attempt there is only one key either side can
+// arrive at: the server answers a copy it has already seen by repeating its
+// answer, without touching the key.
 
 // ErrNotNegotiated is returned when a record has to be sealed before a session
 // key exists. On the client that means the exchange has not finished; on the
@@ -27,31 +47,70 @@ import (
 // bug rather than a race.
 var ErrNotNegotiated = errors.New("olcrtc: session key not negotiated yet")
 
-// errConsumed marks a record that belonged to the exchange itself. muxconn
-// drops whatever it cannot open, so returning an error here is exactly the
-// behaviour we want; this one merely says so precisely.
-var errConsumed = errors.New("olcrtc: key exchange record consumed")
+// consumedError marks a record that belonged to the exchange itself. muxconn
+// drops whatever OpenInto refuses; ConsumedRecord tells it that this refusal is
+// not a decryption failure, so a successful exchange does not show up in the
+// log as one.
+type consumedError struct{}
+
+func (consumedError) Error() string        { return "olcrtc: key exchange record consumed" }
+func (consumedError) ConsumedRecord() bool { return true }
+
+var errConsumed error = consumedError{}
 
 // negotiateTimeout bounds how long a client's first write waits for the
-// exchange to complete. It is generous because bringing a WebRTC carrier up
-// through an SFU legitimately takes tens of seconds, and failing a connection
-// that would have worked is worse than a slow one.
-const negotiateTimeout = 45 * time.Second
+// exchange to complete.
+//
+// The carrier is already up when the exchange starts, so this only has to cover
+// the first frames finding their way through the SFU, which resends handle.
+// What decides the value is what sits above it: the handshake opens its stream
+// through smux, which gives up after 30 seconds with a bare "timeout". Failing
+// here first turns that into an error that says what is actually wrong.
+const negotiateTimeout = 25 * time.Second
 
-// retryInterval is how often the client re-sends its opening frame while
-// waiting. The first frames across a freshly negotiated media path are
-// routinely lost — the SFU may still be wiring up the route — and a handshake
-// that gives up on one lost packet would make the tunnel unreliable for
-// reasons that have nothing to do with the peer.
+// retryInterval is how often the client resends its opening frame while
+// waiting for the answer.
 const retryInterval = 2 * time.Second
 
-// plane holds one channel's send path. A tunnel has two — bulk data and the
-// isolated control channel — and the exchange has to answer on whichever one
-// it was addressed over.
+// readyPoll is how often the client looks again for a channel that will take
+// the opening frame before it has managed to send it at all. Much shorter than
+// retryInterval: nothing has been sent yet, so waiting only adds latency.
+const readyPoll = 50 * time.Millisecond
+
+// plane holds one channel's send path. A tunnel has up to two — bulk data and
+// the isolated control channel.
 type plane struct {
 	aad     []byte
+	control bool
 	send    func([]byte) error
 	canSend func() bool
+}
+
+func (p plane) ready() bool { return p.canSend == nil || p.canSend() }
+
+// bindPlane records a channel, ignoring a second binding of the same one.
+func bindPlane(planes []plane, next plane) []plane {
+	for _, p := range planes {
+		if bytes.Equal(p.aad, next.aad) {
+			return planes
+		}
+	}
+	return append(planes, next)
+}
+
+// exchangePlanes returns the channels the exchange may use: the control
+// channels when there are any, every channel otherwise. See "Which channel".
+func exchangePlanes(planes []plane) []plane {
+	var control []plane
+	for _, p := range planes {
+		if p.control {
+			control = append(control, p)
+		}
+	}
+	if len(control) > 0 {
+		return control
+	}
+	return append([]plane(nil), planes...)
 }
 
 // ClientKeys negotiates a session key against a server public key and then
@@ -67,7 +126,8 @@ type ClientKeys struct {
 
 	mu        sync.Mutex
 	planes    []plane
-	initiator *Initiator
+	initiator *Initiator // this attempt's; nil until the first send
+	frame     []byte     // the opening frame initiator produced
 	started   bool
 	keys      *crypto.KeySet
 	failure   error
@@ -91,15 +151,10 @@ func NewClientKeys(serverPublicKey string) (*ClientKeys, error) {
 }
 
 // Bind records a channel the exchange may speak on. Called once per muxconn.
-func (c *ClientKeys) Bind(aad []byte, send func([]byte) error, canSend func() bool) {
+func (c *ClientKeys) Bind(aad []byte, control bool, send func([]byte) error, canSend func() bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, p := range c.planes {
-		if bytes.Equal(p.aad, aad) {
-			return // same plane rebound; the first one still works
-		}
-	}
-	c.planes = append(c.planes, plane{aad: aad, send: send, canSend: canSend})
+	c.planes = bindPlane(c.planes, plane{aad: aad, control: control, send: send, canSend: canSend})
 }
 
 // Reset discards the negotiated key so the next write starts a fresh exchange.
@@ -112,6 +167,7 @@ func (c *ClientKeys) Reset() {
 	}
 	c.planes = nil
 	c.initiator = nil
+	c.frame = nil
 	c.started = false
 	c.keys = nil
 	c.failure = nil
@@ -147,16 +203,16 @@ func (c *ClientKeys) OpenInto(dst, record, aad []byte) ([]byte, error) {
 
 	sessionKey, err := initiator.Complete(record)
 	if err != nil {
-		// Not our answer: another participant's traffic, or noise. Dropping it
-		// is right, and saying nothing about it is right too.
-		return nil, errConsumed
+		// Not our answer: noise, or a server that holds a different key. The
+		// caller counts it like any record that would not open.
+		return nil, err
 	}
 	set, err := crypto.NewKeySet(sessionKey, crypto.Client)
 	if err != nil {
 		c.fail(fmt.Errorf("derive session keys: %w", err))
 		return nil, errConsumed
 	}
-	c.succeed(set)
+	c.succeed(initiator, set)
 	return nil, errConsumed
 }
 
@@ -181,10 +237,13 @@ func (c *ClientKeys) await() (*crypto.KeySet, error) {
 		c.mu.Unlock()
 	}
 
+	timer := time.NewTimer(negotiateTimeout)
+	defer timer.Stop()
 	select {
 	case <-ready:
-	case <-time.After(negotiateTimeout):
-		c.fail(fmt.Errorf("%w: no answer in %s", ErrNotNegotiated, negotiateTimeout))
+	case <-timer.C:
+		c.fail(fmt.Errorf("%w: the server did not answer within %s (check that publicKey matches the key the server logs at startup)",
+			ErrNotNegotiated, negotiateTimeout))
 	case <-stop:
 		return nil, ErrNotNegotiated
 	}
@@ -202,61 +261,76 @@ func (c *ClientKeys) await() (*crypto.KeySet, error) {
 
 // drive sends the opening frame and keeps resending it until an answer lands.
 func (c *ClientKeys) drive(ready, stop chan struct{}) {
+	sends := 0
 	for {
-		if err := c.sendInit(); err != nil {
+		sent, err := c.sendInit()
+		if err != nil {
 			c.fail(err)
 			return
 		}
+		wait := readyPoll
+		if sent {
+			sends++
+			if sends == 1 {
+				logger.Debugf("olcrtc: key exchange started")
+			}
+			wait = retryInterval
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ready:
+			timer.Stop()
 			return
 		case <-stop:
+			timer.Stop()
 			return
-		case <-time.After(retryInterval):
+		case <-timer.C:
 		}
 	}
 }
 
-// sendInit builds a fresh opening frame and puts it on a channel that will
-// take it. A new frame each time rather than a resend: each carries its own
-// ephemeral, so a server that answered a frame we never saw simply has a
-// session nobody claims, and the next attempt is unaffected.
-func (c *ClientKeys) sendInit() error {
-	initiator, frame, err := NewInitiator(c.serverPub, c.now())
-	if err != nil {
-		return err
-	}
-
+// sendInit puts this attempt's opening frame on a channel that will take it,
+// building the frame on first use. It reports whether any channel took it.
+func (c *ClientKeys) sendInit() (bool, error) {
 	c.mu.Lock()
-	planes := append([]plane(nil), c.planes...)
-	c.initiator = initiator
+	if c.keys != nil {
+		c.mu.Unlock()
+		return false, nil
+	}
+	if c.initiator == nil {
+		initiator, frame, err := NewInitiator(c.serverPub, c.now())
+		if err != nil {
+			c.mu.Unlock()
+			return false, err
+		}
+		c.initiator, c.frame = initiator, frame
+	}
+	frame := c.frame
+	planes := exchangePlanes(c.planes)
 	c.mu.Unlock()
 
-	if len(planes) == 0 {
-		return nil // nothing bound yet; the next tick will find one
-	}
-	// Prefer a channel that says it is ready. On video-paced carriers the
-	// control channel comes up well before the publisher side of the data
-	// channel does, and sending into one that is not ready just loses the
-	// frame.
 	for _, p := range planes {
-		if p.canSend == nil || p.canSend() {
-			if err := p.send(frame); err == nil {
-				return nil
-			}
+		if !p.ready() {
+			continue
+		}
+		if err := p.send(frame); err == nil {
+			return true, nil
 		}
 	}
-	return nil // every channel refused; try again on the next tick
+	return false, nil
 }
 
-func (c *ClientKeys) succeed(set *crypto.KeySet) {
+// succeed installs the session key, provided it answers this attempt's frame:
+// a Reset in the meantime makes it an answer nobody is waiting for.
+func (c *ClientKeys) succeed(initiator *Initiator, set *crypto.KeySet) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.keys != nil {
+	if c.keys != nil || c.initiator != initiator {
 		return
 	}
 	c.keys = set
 	close(c.ready)
+	logger.Infof("olcrtc: session key negotiated")
 }
 
 func (c *ClientKeys) fail(err error) {
@@ -266,6 +340,7 @@ func (c *ClientKeys) fail(err error) {
 		return
 	}
 	c.failure = err
+	logger.Warnf("olcrtc: key exchange failed: %v", err)
 }
 
 // ServerKeys answers exchanges from one peer and then behaves as an ordinary
@@ -276,29 +351,33 @@ func (c *ClientKeys) fail(err error) {
 // impossible.
 type ServerKeys struct {
 	responder *Responder
+	peer      string
 	now       func() time.Time
+
+	// exchange serialises answering, so two copies of one opening frame
+	// arriving together cannot both reach Accept.
+	exchange sync.Mutex
 
 	mu     sync.Mutex
 	planes []plane
 	keys   *crypto.KeySet
+	// frame and reply are the last exchange answered, kept so a client that
+	// did not hear the answer can be given the same one again.
+	frame []byte
+	reply []byte
 }
 
 // NewServerKeys returns a Keys that answers exchanges with the server's static
-// private key.
-func NewServerKeys(responder *Responder) *ServerKeys {
-	return &ServerKeys{responder: responder, now: time.Now}
+// private key. peer names the participant in log lines and may be empty.
+func NewServerKeys(responder *Responder, peer string) *ServerKeys {
+	return &ServerKeys{responder: responder, peer: peer, now: time.Now}
 }
 
 // Bind records a channel the exchange may answer on.
-func (s *ServerKeys) Bind(aad []byte, send func([]byte) error, canSend func() bool) {
+func (s *ServerKeys) Bind(aad []byte, control bool, send func([]byte) error, canSend func() bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, p := range s.planes {
-		if bytes.Equal(p.aad, aad) {
-			return
-		}
-	}
-	s.planes = append(s.planes, plane{aad: aad, send: send, canSend: canSend})
+	s.planes = bindPlane(s.planes, plane{aad: aad, control: control, send: send, canSend: canSend})
 }
 
 // Negotiated reports whether this peer has completed an exchange.
@@ -325,55 +404,98 @@ func (s *ServerKeys) SealInto(dst, plaintext, aad []byte) ([]byte, error) {
 // frame of an exchange.
 //
 // The order matters. Trying the session key first keeps the cost of a data
-// record at exactly what it was; only a record that fails to open — noise from
-// the room, or a peer starting over after a reconnect — pays for an X25519
-// operation. A peer that re-handshakes therefore replaces its key without any
-// explicit teardown, which is what a carrier rebuild looks like from here.
+// record at exactly what it was; only a record that fails to open pays for
+// anything more, and only one of exactly the opening frame's size pays for an
+// X25519 operation.
 func (s *ServerKeys) OpenInto(dst, record, aad []byte) ([]byte, error) {
 	s.mu.Lock()
 	keys := s.keys
 	s.mu.Unlock()
 
+	var openErr error = ErrBadFrame
 	if keys != nil {
-		if out, err := keys.OpenInto(dst, record, aad); err == nil {
+		out, err := keys.OpenInto(dst, record, aad)
+		if err == nil {
 			return out, nil
 		}
+		openErr = err
 	}
+	if len(record) != InitSize {
+		return nil, openErr
+	}
+	return nil, s.answer(record, aad)
+}
 
-	reply, sessionKey, err := s.responder.Accept(record, s.now())
+// answer handles an opening frame: a copy of the last one gets the same answer
+// again, a new one gets a new session.
+func (s *ServerKeys) answer(frame, aad []byte) error {
+	s.exchange.Lock()
+	defer s.exchange.Unlock()
+
+	s.mu.Lock()
+	if s.frame != nil && bytes.Equal(frame, s.frame) {
+		reply := s.reply
+		s.mu.Unlock()
+		s.send(reply, aad)
+		return errConsumed
+	}
+	rekey := s.keys != nil
+	s.mu.Unlock()
+
+	reply, sessionKey, err := s.responder.Accept(frame, s.now())
 	if err != nil {
-		if keys != nil {
-			// A record we could not open and that is not an exchange either.
-			// Report the original failure shape so muxconn's accounting still
-			// means what it says.
-			return nil, err
-		}
-		return nil, errConsumed
+		return err
 	}
-
-	set, keyErr := crypto.NewKeySet(sessionKey, crypto.Server)
-	if keyErr != nil {
-		return nil, errConsumed
+	set, err := crypto.NewKeySet(sessionKey, crypto.Server)
+	if err != nil {
+		return fmt.Errorf("derive session keys: %w", err)
 	}
 
 	s.mu.Lock()
 	s.keys = set
+	s.frame = bytes.Clone(frame)
+	s.reply = reply
+	s.mu.Unlock()
+
+	if rekey {
+		logger.Infof("olcrtc: session key renegotiated%s", s.label())
+	} else {
+		logger.Infof("olcrtc: session key negotiated%s", s.label())
+	}
+	s.send(reply, aad)
+	return errConsumed
+}
+
+// send answers on the channel the opening frame arrived over, falling back to
+// any other. The client only sends where it can also receive, so the first
+// choice is the one that works; the fallback covers a channel that has since
+// gone away.
+func (s *ServerKeys) send(reply, aad []byte) {
+	s.mu.Lock()
 	planes := append([]plane(nil), s.planes...)
 	s.mu.Unlock()
 
-	// Answer on the channel the opening frame arrived over. Anything else and
-	// a client whose control plane is up but whose data plane is not would
-	// never hear back.
 	for _, p := range planes {
-		if bytes.Equal(p.aad, aad) {
-			_ = p.send(reply)
-			return nil, errConsumed
+		if !bytes.Equal(p.aad, aad) {
+			continue
 		}
+		err := p.send(reply)
+		if err == nil {
+			return
+		}
+		logger.Debugf("olcrtc: key exchange answer%s not sent: %v", s.label(), err)
 	}
 	for _, p := range planes {
-		if err := p.send(reply); err == nil {
-			break
+		if !bytes.Equal(p.aad, aad) && p.send(reply) == nil {
+			return
 		}
 	}
-	return nil, errConsumed
+	logger.Warnf("olcrtc: key exchange answer%s could not be sent on any channel", s.label())
+}
+
+func (s *ServerKeys) label() string {
+	if s.peer == "" {
+		return ""
+	}
+	return " peer=" + s.peer
 }

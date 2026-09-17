@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -267,10 +268,11 @@ func TestStaleTimestampsAreRefused(t *testing.T) {
 	}
 }
 
-// TestReplayingAFrameYieldsAKeyTheReplayerCannotDerive is why a replay cache is
-// not needed: the server answers with a fresh ephemeral, so the session key is
-// different and belongs to nobody.
-func TestReplayingAFrameYieldsAKeyTheReplayerCannotDerive(t *testing.T) {
+// TestAReplayedFrameIsRefused: answering a replay would be harmless to the
+// session's secrecy — the fresh server ephemeral gives a key nobody else holds —
+// but switching a live peer to that key would cut it off. So a frame is
+// accepted once, and the genuine client still completes against its answer.
+func TestAReplayedFrameIsRefused(t *testing.T) {
 	private, public := keyPair(t)
 	initiator, init, err := NewInitiator(public, now)
 	if err != nil {
@@ -285,22 +287,68 @@ func TestReplayingAFrameYieldsAKeyTheReplayerCannotDerive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, replayKey, err := responder.Accept(init, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(firstKey, replayKey) {
-		t.Fatal("a replayed frame produced the same session key")
+	if _, _, err := responder.Accept(init, now.Add(time.Second)); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed frame: err = %v, want ErrReplay", err)
 	}
 
-	// And the genuine client, which holds the ephemeral private key, still
-	// completes against the reply meant for it.
 	got, err := initiator.Complete(firstReply)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, firstKey) {
 		t.Fatal("the genuine client derived a different key from its own reply")
+	}
+}
+
+// TestReplayMemoryOutlivesTheWindow pins the invariant that keeps the memory
+// bounded without opening a gap: an entry is forgotten only once its frame
+// would be refused on its timestamp anyway.
+func TestReplayMemoryOutlivesTheWindow(t *testing.T) {
+	private, public := keyPair(t)
+	responder, err := NewResponder(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The worst case: a client clock running a full window ahead, so the frame
+	// stays acceptable for twice the window after it arrives.
+	sent := now.Add(MaxClockSkew)
+	_, init, err := NewInitiator(public, sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := responder.Accept(init, now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, later := range []time.Duration{time.Minute, MaxClockSkew, 2*MaxClockSkew - time.Second} {
+		if _, _, err := responder.Accept(init, now.Add(later)); !errors.Is(err, ErrReplay) {
+			t.Fatalf("%s later: err = %v, want ErrReplay", later, err)
+		}
+	}
+	past := now.Add(2*MaxClockSkew + time.Second)
+	if _, _, err := responder.Accept(init, past); !errors.Is(err, ErrClockSkew) {
+		t.Fatalf("after the window: err = %v, want ErrClockSkew", err)
+	}
+}
+
+func TestReplayMemoryIsBounded(t *testing.T) {
+	var m replayMemory
+	var first [KeySize]byte
+	first[0] = 1
+	if !m.remember(first, now) {
+		t.Fatal("a new key was reported as seen")
+	}
+	for i := 0; i < maxRemembered; i++ {
+		var key [KeySize]byte
+		binary.BigEndian.PutUint64(key[8:], uint64(i))
+		m.remember(key, now)
+	}
+	if len(m.order) != maxRemembered || len(m.index) != maxRemembered {
+		t.Fatalf("memory holds %d/%d entries, want at most %d", len(m.order), len(m.index), maxRemembered)
+	}
+	if !m.remember(first, now) {
+		t.Fatal("the oldest entry was not the one forgotten when the memory filled")
 	}
 }
 
@@ -388,14 +436,18 @@ func BenchmarkAccept(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	_, init, err := NewInitiator(public, time.Now())
-	if err != nil {
-		b.Fatal(err)
-	}
 	at := time.Now()
+	inits := make([][]byte, b.N)
+	for i := range inits {
+		_, init, err := NewInitiator(public, at)
+		if err != nil {
+			b.Fatal(err)
+		}
+		inits[i] = init
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := responder.Accept(init, at); err != nil {
+		if _, _, err := responder.Accept(inits[i], at); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -1,0 +1,15 @@
+--- a/internal/handshake/handshake_test.go
++++ b/internal/handshake/handshake_test.go
+@@ -9,8 +9,10 @@
+ 	"testing"
+ )
+ 
+-const testSessionID = "sess-42"
+-const testPeerID = "1234abcd"
++const (
++	testSessionID = "sess-42"
++	testPeerID    = "1234abcd"
++)
+ 
+ var errNope = errors.New("nope")
+ 

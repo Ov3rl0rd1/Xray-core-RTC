@@ -8,7 +8,7 @@
  	"github.com/openlibrecommunity/olcrtc/internal/logger"
  	"github.com/openlibrecommunity/olcrtc/internal/transport"
  )
-@@ -142,11 +141,45 @@
+@@ -142,11 +141,59 @@
  // Plaintext buffers are recycled through frameBufPool: Push borrows a
  // buffer to decrypt into, ships it through the channel, and Read returns
  // the buffer to the pool once its caller has consumed all the bytes.
@@ -29,9 +29,23 @@
 +//
 +// aad identifies which plane the send path belongs to — the same value the
 +// conn passes to SealInto and OpenInto — so a Keys handed both the data and
-+// the control conn can answer on whichever one a record arrived from.
++// the control conn can answer on whichever one a record arrived from. control
++// marks the transport's isolated control plane, which a transport may deliver
++// before it has authenticated the peer when it delivers nothing else.
 +type Binder interface {
-+	Bind(aad []byte, send func([]byte) error, canSend func() bool)
++	Bind(aad []byte, control bool, send func([]byte) error, canSend func() bool)
++}
++
++// consumedRecord is implemented by an error OpenInto returns for a record that
++// was addressed to the Keys itself rather than to the stream. Push drops such a
++// record without counting it as a decryption failure.
++type consumedRecord interface {
++	ConsumedRecord() bool
++}
++
++func isConsumed(err error) bool {
++	var consumed consumedRecord
++	return errors.As(err, &consumed) && consumed.ConsumedRecord()
 +}
 +
 +// bindKeys hands the conn's send path to a Keys that asked for it.
@@ -41,7 +55,7 @@
 +		if canSend == nil {
 +			canSend = c.ln.CanSend
 +		}
-+		b.Bind(c.aad, c.send, canSend)
++		b.Bind(c.aad, string(c.aad) == controlRecordAAD, c.send, canSend)
 +	}
 +	return c
 +}
@@ -55,7 +69,7 @@
  	aad     []byte
  
  	in        chan *[]byte
-@@ -179,21 +212,21 @@
+@@ -179,21 +226,21 @@
  
  // New wires a Conn over the given transport. Push must be set as the
  // transport's OnData callback before this conn is used.
@@ -81,7 +95,7 @@
  	cp, ok := ln.(transport.ControlPlane)
  	if !ok {
  		return nil
-@@ -208,12 +241,12 @@
+@@ -208,12 +255,12 @@
  		closeCh: make(chan struct{}),
  	}
  	cp.SetControlOnData(func(data []byte) { c.Push(data) })
@@ -97,7 +111,7 @@
  		ln: ln,
  		send: func(data []byte) error {
  			return ln.SendTo(peerID, data)
-@@ -222,7 +255,7 @@
+@@ -222,7 +269,7 @@
  		aad:     []byte(dataRecordAAD),
  		in:      make(chan *[]byte, inboundQueue),
  		closeCh: make(chan struct{}),
@@ -106,7 +120,7 @@
  }
  
  // NewPeerControlUnbound wires a Conn to the per-peer control plane of a
-@@ -233,7 +266,7 @@
+@@ -233,7 +280,7 @@
  // caller must feed it via Push. PeerControlPlane exposes a single
  // SetControlOnPeerData callback covering every peer, so registering here
  // would clobber the caller's demultiplexer - hence the name.
@@ -115,7 +129,7 @@
  	cp, ok := ln.(transport.PeerControlPlane)
  	if !ok {
  		return nil
-@@ -251,7 +284,7 @@
+@@ -251,7 +298,7 @@
  		in:      make(chan *[]byte, inboundQueue),
  		closeCh: make(chan struct{}),
  	}
@@ -124,3 +138,14 @@
  }
  
  // Push hands an encrypted wire payload (one OnData event) to the conn.
+@@ -266,7 +313,9 @@
+ 	pt, err := c.keys.OpenInto(*bufPtr, ciphertext, c.aad)
+ 	if err != nil {
+ 		releaseFrameBuf(bufPtr)
+-		c.noteDecryptFailure(len(ciphertext), err)
++		if !isConsumed(err) {
++			c.noteDecryptFailure(len(ciphertext), err)
++		}
+ 		return
+ 	}
+ 	*bufPtr = pt

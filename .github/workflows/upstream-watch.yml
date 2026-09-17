@@ -85,29 +85,78 @@ jobs:
           set -o pipefail
           bash ./fork/bin/fork build "${{ steps.decide.outputs.ref }}" /tmp/trial 2>&1 | tee /tmp/apply.log
 
+      - name: Fetch the geodata the suite reads
+        # Four of upstream's tests read resources/*.dat, and this job used to run
+        # without them. The comment below the test command claimed those failures
+        # were tolerated; nothing implemented that, so every watch reported a fork
+        # that was fine as broken. A watch that cries wolf weekly is worse than no
+        # watch. Fetching them is cheap; failing to is not worth failing the run
+        # over, so the report carries the caveat instead.
+        if: steps.decide.outputs.up_to_date == 'false' && steps.apply.outcome == 'success'
+        id: geodata
+        continue-on-error: true
+        run: |
+          BASE="https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release"
+          mkdir -p /tmp/trial/resources
+          for NAME in geoip geosite; do
+            FILE="/tmp/trial/resources/${NAME}.dat"
+            if ! curl -sfL "$BASE/${NAME}.dat" -o "$FILE"; then
+              echo "could not fetch ${NAME}.dat"
+              continue
+            fi
+            HASH="$(curl -sfL "$BASE/${NAME}.dat.sha256sum" | awk '{print $1}')"
+            if [ -n "$HASH" ] && ! echo "$HASH  $FILE" | sha256sum -c - >/dev/null 2>&1; then
+              echo "${NAME}.dat failed its checksum - dropping it"
+              rm -f "$FILE"
+            fi
+          done
+          ls -l /tmp/trial/resources || true
+
       - name: Build and test
         if: steps.decide.outputs.up_to_date == 'false' && steps.apply.outcome == 'success'
         id: verify
         continue-on-error: true
         working-directory: /tmp/trial
         run: |
-          set -o pipefail
-          {
-            echo "== go get (pinned deps) + go mod tidy =="
-            bash "$GITHUB_WORKSPACE/fork/bin/fork" deps . 2>&1
-            echo ""
-            echo "== go build ./... =="
-            go build ./... 2>&1
-            echo ""
-            echo "== go vet (fork packages) =="
-            go vet ./proxy/olcrtc/... ./app/dispatcher/... ./common/pause/... ./transport/internet/hysteria/... 2>&1
-            echo ""
-            echo "== go test ./... =="
-            # Geodata-dependent tests need assets this job does not fetch; the
-            # question here is "does the fork still work on the new upstream",
-            # not "is upstream's suite green", so those are allowed to fail.
-            go test -timeout 30m ./... 2>&1 | tail -60
-          } | tee /tmp/verify.log
+          set +e
+          : > /tmp/verify.log
+          : > /tmp/failures.md
+          failed=0
+
+          # Each phase runs on its own so the report can name the one that broke.
+          # The issue used to carry the last 60 lines of the whole run, which for
+          # a Go test suite is the part spent on packages that passed: the
+          # failures scroll away and the report says only that something broke.
+          phase() {
+            local name="$1"; shift
+            echo "== $name ==" >> /tmp/verify.log
+            "$@" > /tmp/phase.log 2>&1
+            local rc=$?
+            cat /tmp/phase.log >> /tmp/verify.log
+            echo "" >> /tmp/verify.log
+            if [ "$rc" -ne 0 ]; then
+              failed=1
+              {
+                echo "**$name** failed:"
+                echo ""
+                echo '```'
+                grep -E '^(--- FAIL|FAIL|panic:|# |[^ ]+\.go:[0-9]+:)' /tmp/phase.log | head -30
+                echo '```'
+                echo ""
+              } >> /tmp/failures.md
+            fi
+            printf '%s: rc=%d\n' "$name" "$rc"
+          }
+
+          phase "go get (pinned deps) + go mod tidy" bash "$GITHUB_WORKSPACE/fork/bin/fork" deps .
+          phase "go build ./..." go build ./...
+          phase "go vet (fork packages)" go vet ./proxy/olcrtc/... ./app/dispatcher/... ./common/pause/... ./transport/internet/hysteria/...
+          # -p 2 for the same reason fork/bin/fork check uses it: a couple of
+          # upstream tests are timing-sensitive and flake under full parallelism,
+          # and a watch that reports a flake as a break is a watch nobody reads.
+          phase "go test ./..." go test -timeout 30m -p 2 ./...
+
+          exit $failed
 
       - name: Compose the report
         if: steps.decide.outputs.up_to_date == 'false'
@@ -152,6 +201,13 @@ jobs:
               broken)
                 echo "The patches apply, but the result does not build or test cleanly."
                 echo "Usually an upstream API change that the overlay has to follow."
+                echo ""
+                cat /tmp/failures.md 2>/dev/null
+                if [ ! -s /tmp/trial/resources/geoip.dat ] || [ ! -s /tmp/trial/resources/geosite.dat ]; then
+                  echo "> Note: the geodata download did not complete, so failures in"
+                  echo "> \`app/router\`, \`common/geodata\` and \`infra/conf\` may be that"
+                  echo "> and not the fork."
+                fi
                 ;;
             esac
             echo ""

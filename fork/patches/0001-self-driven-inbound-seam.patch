@@ -24,15 +24,15 @@ index cec93dd4..46fa4c5e 100644
  	if streamSettings != nil && streamSettings.SocketSettings != nil {
  		ctx = session.ContextWithSockopt(ctx, &session.Sockopt{
 diff --git a/infra/conf/xray.go b/infra/conf/xray.go
-index bdcabbd5..b7194b8e 100644
+index be37cffe..7e49ec67 100644
 --- a/infra/conf/xray.go
 +++ b/infra/conf/xray.go
-@@ -138,7 +138,7 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
+@@ -139,7 +139,7 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
  	receiverSettings := &proxyman.ReceiverConfig{}
  
  	// TUN inbound doesn't need port configuration as it uses network interface instead
 -	if strings.ToLower(c.Protocol) == "tun" {
 +	if strings.ToLower(c.Protocol) == "tun" || isPortlessInbound(c.Protocol) {
  		// Skip port validation for TUN
- 	} else if c.ListenOn == nil {
+ 	} else if c.ListenOn == nil || len(c.ListenOn.String()) == 0 {
  		// Listen on anyip, must set PortList

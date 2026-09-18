@@ -76,10 +76,14 @@ resolved in three steps:
 
 1. their own `Policy`, if the panel has pushed one;
 2. otherwise `Config.default_policy`, if one is configured;
-3. otherwise the dispatcher's level table.
+3. otherwise the dispatcher's level table, when `XRAY_SHAPER_TIERS` has
+   switched that table on -- and unlimited when it has not.
 
-So enabling the store does not unshape everybody the panel has not got to yet —
-which is exactly the moment a new server is most likely to be misconfigured.
+So enabling the store does not unshape everybody the panel has not got to yet,
+provided the table is on. With the table off (the default) an unpushed user is
+unshaped, which is the right way round for a server whose plans nobody has
+decided yet: a guessed cap that nothing in the logs explains is worse than no
+cap at all.
 
 ---
 
@@ -91,10 +95,10 @@ commonly label users with the subscription UUID, because that is the field
 Xray removes users and reports stats by; if yours does, then the UUID is the
 key here too and nothing has to change to line the two up.
 
-Level still matters as the fallback: a panel that provisions everyone at
-`level: 0` gets level 0's plan for anyone the store has no policy for. Setting
-`Level` from the plan is a one-line change on the panel side and needs no API
-at all — see [`common/shaper/README.md`](../../common/shaper/README.md).
+Level still matters as the fallback, once `XRAY_SHAPER_TIERS` is set: a panel
+that provisions everyone at `level: 0` then gets level 0's plan for anyone the
+store has no policy for. Setting `Level` from the plan is a one-line change on
+the panel side and needs no API at all -- see [`common/shaper/README.md`](../../common/shaper/README.md).
 
 | Field | Meaning |
 |---|---|

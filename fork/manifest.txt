@@ -21,6 +21,7 @@ main/distro/all/fork.go
 # ── Per-user traffic shaping (engine + the dispatcher hook that drives it) ──
 common/shaper/**
 app/dispatcher/ratelimit.go
+app/dispatcher/ratelimit_test.go
 app/dispatcher/fork_usage.go
 
 # ── Per-user policy, quotas and usage, plus its management API ──────────────

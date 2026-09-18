@@ -2,6 +2,8 @@ package dispatcher
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -87,6 +89,35 @@ const mbit = 1_000_000 / 8
 // an unrecognised level should mean "the ordinary plan", never "unlimited".
 var defaultTier = tiers[0]
 
+// TiersEnv switches the built-in level table on.
+//
+// It exists because the table is a guess and the server it runs on is not.
+// Shaping every user of an unconfigured deployment at level 0 is not the
+// cautious default it looks like: an operator who has not chosen plans yet has
+// not asked for a 50 Mbit/s cap either, and the cap does not announce itself —
+// it arrives as "the VPN got slow" with nothing in the logs. Worse, the fair
+// split then divides that invented cap again by the number of source addresses
+// a subscription is currently using, so a phone on carrier NAT can land in
+// single digits while every dashboard reports a healthy node.
+//
+// So the table is opt-in. Unset, this fork shapes nobody unless a policy store
+// says otherwise, which is what a server nobody has configured should do. Set
+// it to 1 (or true/on/yes) once the levels mean something on your panel.
+const TiersEnv = "XRAY_SHAPER_TIERS"
+
+// tiersEnabled is read once at start-up: a plan must not change because
+// something in the process edited the environment mid-flight.
+var tiersEnabled = tiersOn(os.Getenv(TiersEnv))
+
+func tiersOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
+}
+
 // resolver is the seam through which per-user policy is supplied. It starts as
 // the level table above and is replaced by [SetLimitsResolver] once a policy
 // store is present.
@@ -123,6 +154,11 @@ func LimitsFor(u shaper.User) shaper.Limits {
 // every user the panel had not yet pushed — which is exactly the moment a
 // server is most likely to be misconfigured.
 func TierLimits(u shaper.User) shaper.Limits {
+	if !tiersEnabled {
+		// No table, no policy store: nothing here has been told what this
+		// user is entitled to, so nothing here throttles them. See TiersEnv.
+		return shaper.Limits{}
+	}
 	if l, ok := tiers[u.Level]; ok {
 		return l
 	}

@@ -128,6 +128,20 @@ short-flow quota.
 
 ## Tariffs
 
+**The table below is off unless you ask for it.** Set `XRAY_SHAPER_TIERS=1` in
+the server's environment to switch it on. Unset, `TierLimits` returns an empty
+`Limits` for every level and this package shapes nobody, so a deployment that
+has not chosen its plans yet runs at line rate.
+
+That default is deliberate. The table is a guess; the server it runs on is not.
+Applying a guessed 50 Mbit/s cap to a whole fleet is not the cautious choice it
+looks like -- it does not announce itself anywhere, it arrives as "the VPN got
+slow", and the fair split then divides that invented cap again by however many
+source addresses the subscription is using, which puts a phone on carrier NAT
+into single-digit Mbit/s while every dashboard still reports a healthy node.
+A policy store (see [`app/tariff`](../../app/tariff/README.md)) is unaffected:
+it installs its own resolver and works whether or not the table is on.
+
 Plans are keyed by the user's **Xray level**, in `tiers` in
 [`ratelimit.go`](../../app/dispatcher/ratelimit.go).
 
@@ -145,8 +159,8 @@ level.
 | 2 | 200 / 200 | 500 Mbit |
 | 3 | unshaped | — |
 
-An unrecognised level gets level 0's plan — an unknown level must mean "the
-ordinary plan", never "unlimited".
+An unrecognised level gets level 0's plan — once the table is on, an
+unknown level must mean "the ordinary plan", never "unlimited".
 
 Level 3 is an empty `Limits`, which disables the writer wrappers outright, so
 unshaped users pay nothing at all for the feature existing.

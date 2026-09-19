@@ -65,6 +65,9 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 	}); err != nil {
 		return nil, err
 	}
+	// Make this inbound's room pool visible at /debug/vars. Last thing before
+	// returning, so a server that failed to build is never published. See expvar.go.
+	s.registerForVars()
 	return s, nil
 }
 

@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync/atomic"
 
 	"github.com/xtls/xray-core/common/shaper"
@@ -37,6 +38,12 @@ type UsageMeter interface {
 	// BlockReason explains a Blocked meter. It is only called on the write
 	// that is being refused, so it may be as slow as it likes.
 	BlockReason() string
+	// Wait holds a write of n bytes back for as long as the policy store
+	// wants this connection slower than the user's plan -- a per-inbound
+	// allowance that has run out, say. It is called on the write path after
+	// the shaper has had its say, and must return at once when there is
+	// nothing to wait for.
+	Wait(ctx context.Context, dir shaper.Direction, n int) error
 	// Release gives up the connection's references. It is called once, and
 	// must tolerate being called again.
 	Release()

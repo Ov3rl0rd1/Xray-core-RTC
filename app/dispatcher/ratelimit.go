@@ -293,6 +293,12 @@ func (w *userWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 			buf.ReleaseMulti(mb)
 			return err
 		}
+		if w.meter != nil {
+			if err := w.meter.Wait(w.ctx, w.dir, n); err != nil {
+				buf.ReleaseMulti(mb)
+				return err
+			}
+		}
 	}
 	if err := w.writer.WriteMultiBuffer(mb); err != nil {
 		return err

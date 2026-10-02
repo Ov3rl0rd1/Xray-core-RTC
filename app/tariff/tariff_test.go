@@ -1,6 +1,7 @@
 package tariff
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -332,6 +333,24 @@ func TestPerInboundQuotaCountsOnlyItsInbound(t *testing.T) {
 	if !full.Blocked() {
 		t.Fatal("the full-tunnel profile went over its allowance and was not blocked")
 	}
+	if got := full.BlockReason(); got != "quota:full-tunnel" {
+		t.Fatalf("block reason = %q, want quota:full-tunnel", got)
+	}
+
+	// ...and only that profile. Its allowance running out must not take the
+	// user's other inbounds down with it: that is what a per-inbound quota is.
+	if split.Blocked() {
+		t.Fatal("the full-tunnel allowance running out blocked the split-tunnel profile too")
+	}
+	if m.Attach("p@example", 0, "split-tunnel", "1.2.3.4").Blocked() {
+		t.Fatal("a new split-tunnel connection was refused over the full-tunnel allowance")
+	}
+	if !m.Attach("p@example", 0, "full-tunnel", "5.6.7.8").Blocked() {
+		t.Fatal("a new full-tunnel connection got through an exhausted allowance")
+	}
+	if u := m.Usage("p@example"); u.GetBlocked() {
+		t.Fatalf("usage reports the whole user blocked (%q) over one inbound's quota", u.GetBlockedReason())
+	}
 
 	usage := m.Usage("p@example")
 	if len(usage.GetInbounds()) != 2 {
@@ -343,6 +362,73 @@ func TestPerInboundQuotaCountsOnlyItsInbound(t *testing.T) {
 	}
 	if byTag["split-tunnel"] != 1*mb || byTag["full-tunnel"] != 21*kb {
 		t.Fatalf("per-inbound usage = %v, want the two profiles counted apart", byTag)
+	}
+}
+
+// TestPerInboundThrottleSlowsOnlyItsInbound is the gentler version of the
+// above: the CPU-hungry profile drops to a trickle once its allowance is spent,
+// while the user's plan -- and everything else they connect through -- stays
+// exactly as it was.
+func TestPerInboundThrottleSlowsOnlyItsInbound(t *testing.T) {
+	m, _ := newTestManager(t, nil)
+	const trickle = 64 * kb // bytes per second
+	if err := m.SetPolicy(&Policy{
+		Email:       "t@example",
+		DownlinkBps: 8 * mb,
+		BoostBytes:  100 * mb,
+		Quotas: []*Quota{{
+			InboundTag: "olcrtc-in", LimitBytes: 10 * kb,
+			Action: Action_ACTION_THROTTLE, ThrottleBps: trickle,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rtc := m.Attach("t@example", 0, "olcrtc-in", "dev-1")
+	vless := m.Attach("t@example", 0, "vless-in", "1.2.3.4")
+
+	ctx := context.Background()
+	start := time.Now()
+	if err := rtc.Wait(ctx, shaper.Down, 48*kb); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Fatalf("throttled before the allowance ran out: waited %v", d)
+	}
+
+	rtc.Count(shaper.Down, 11*kb)
+	if rtc.Blocked() || vless.Blocked() {
+		t.Fatal("a THROTTLE quota blocked traffic")
+	}
+
+	// The plan itself is untouched: same cap, boost still there.
+	l := m.Limits(shaper.User{Email: "t@example"})
+	if l.DownlinkBPS != 8*mb || l.BoostBytes != 100*mb {
+		t.Fatalf("the user's plan changed to %+v over one inbound's quota", l)
+	}
+
+	start = time.Now()
+	if err := vless.Wait(ctx, shaper.Down, 256*kb); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Fatalf("the other inbound was slowed down: waited %v", d)
+	}
+
+	// 48 KiB at 64 KiB/s with a 16 KiB burst: ~0.5 s. Generous margins, real time.
+	start = time.Now()
+	if err := rtc.Wait(ctx, shaper.Down, 48*kb); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d < 300*time.Millisecond || d > 2*time.Second {
+		t.Fatalf("48 KiB through the throttled inbound took %v, want about 0.5 s", d)
+	}
+
+	// A cancelled connection stops waiting instead of hanging on the limiter.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := rtc.Wait(cctx, shaper.Up, 1*mb); err == nil {
+		t.Fatal("Wait on a cancelled context returned no error")
 	}
 }
 
@@ -627,6 +713,45 @@ func TestRestartIntoANewMonthStartsTheQuotaClean(t *testing.T) {
 	}
 	if mt := restarted.Attach("s@example", 0, "in", "1.1.1.1"); mt.Blocked() {
 		t.Fatal("last month's exhausted quota is still blocking this month")
+	}
+}
+
+// TestSetConfigKeepsTheStatePath guards the ledger against the API: a panel
+// pushing its settings knows nothing about where this host keeps the file, and
+// a config without a path must not quietly turn persistence off.
+func TestSetConfigKeepsTheStatePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tariff.json")
+	m, _ := newTestManager(t, &Config{StatePath: path})
+
+	pushed := &Config{FlushSeconds: 30}
+	m.SetConfig(pushed)
+	if got := m.Config().GetStatePath(); got != path {
+		t.Fatalf("state path after SetConfig without one = %q, want %q", got, path)
+	}
+	if pushed.GetStatePath() != "" {
+		t.Fatal("SetConfig wrote into the caller's message")
+	}
+	if got := m.Config().GetFlushSeconds(); got != 30 {
+		t.Fatalf("flush_seconds = %d, the rest of the config was not applied", got)
+	}
+
+	m.SetConfig(&Config{StatePath: filepath.Join(t.TempDir(), "elsewhere.json")})
+	if got := m.Config().GetStatePath(); got != path {
+		t.Fatalf("state path moved to %q by the API, want it to stay %q", got, path)
+	}
+
+	if err := m.SetPolicy(&Policy{Email: "p@example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(&Config{StatePath: path})
+	if err := restarted.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Policy("p@example") == nil {
+		t.Fatal("nothing was written to the host's state file after SetConfig")
 	}
 }
 

@@ -35,6 +35,7 @@ import (
 	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/shaper"
+	"google.golang.org/protobuf/proto"
 )
 
 // StatePathEnv names the environment variable holding the state file's path.
@@ -146,10 +147,21 @@ func (m *Manager) Install() {
 func (m *Manager) Config() *Config { return m.cfg.Load() }
 
 // SetConfig replaces the configuration and re-evaluates every user against it.
+//
+// Everything but the state file's path: that belongs to the host, not to
+// whoever is calling the API. A panel that sent a config without one used to
+// switch persistence off without a word -- the next restart then handed every
+// user a fresh monthly allowance -- and one that sent a path could make the
+// process write wherever it is allowed to. So the path the manager was started
+// with is kept, exactly as Load already keeps it over the one recorded in the
+// file.
 func (m *Manager) SetConfig(cfg *Config) {
 	if cfg == nil {
 		cfg = &Config{}
+	} else {
+		cfg = proto.Clone(cfg).(*Config)
 	}
+	cfg.StatePath = m.cfg.Load().GetStatePath()
 	m.cfg.Store(cfg)
 	m.SetServerQuota(cfg.GetServerQuota())
 	m.recomputeAll()
@@ -326,9 +338,16 @@ func (m *Manager) recompute(u *userState) {
 	}
 	if !eff.blocked {
 		for _, q := range u.quotas {
-			if q.isExceeded() {
-				applyAction(eff, q.spec.GetAction(), m.throttleBPS(q.spec.GetThrottleBps()), quotaReason(q.spec))
+			if !q.isExceeded() {
+				continue
 			}
+			action, throttle, reason := q.spec.GetAction(), m.throttleBPS(q.spec.GetThrottleBps()), quotaReason(q.spec)
+			if tag := q.spec.GetInboundTag(); tag != "" {
+				// Only the inbound the quota counts: see effective.scoped.
+				eff.inScope(tag, action, throttle, reason)
+				continue
+			}
+			applyAction(eff, action, throttle, reason)
 		}
 	}
 	u.mu.Unlock()

@@ -91,9 +91,15 @@ func max64(a, b int64) int64 {
 // figure gets restored. An empty inboundTag adds to the user's total without
 // attributing it to any inbound.
 //
-// The bytes count towards every quota they would have counted towards had they
-// really been carried, so restoring a baseline can immediately exhaust a quota
-// — which is the point.
+// The bytes count towards every quota of the user's they would have counted
+// towards had they really been carried, so restoring a baseline can
+// immediately exhaust a quota — which is the point.
+//
+// They do NOT count towards the server allowance. That allowance is what this
+// host carried, and a restored baseline was carried somewhere else — by
+// another server, before the user moved here. Counting it used to make every
+// evacuation inflate the receiving server's month by everyone's history: thirty
+// users with 300 GB each is 9 TB this host never moved.
 func (m *Manager) AddUsage(email, inboundTag string, up, down uint64) error {
 	if email == "" {
 		return errors.New("tariff: email must not be empty")
@@ -125,11 +131,6 @@ func (m *Manager) AddUsage(email, inboundTag string, up, down uint64) error {
 	}
 	for _, q := range exceeded {
 		m.quotaExceeded(u, q)
-	}
-	if b := m.serverBucket.Load(); b != nil {
-		if _, hit := b.add(total); hit {
-			m.serverQuotaExceeded(b)
-		}
 	}
 	m.markDirty()
 	return nil

@@ -640,6 +640,41 @@ func TestAddUsageRestoresABaseline(t *testing.T) {
 	}
 }
 
+// TestAddUsageLeavesTheServerAllowanceAlone: a baseline restored after a move
+// was carried by another server. The user's quotas must see it; this host's
+// own monthly allowance must not.
+func TestAddUsageLeavesTheServerAllowanceAlone(t *testing.T) {
+	m, _ := newTestManager(t, nil)
+	m.SetServerQuota(&ServerQuota{LimitBytes: 10 * gb, Window: Window_WINDOW_MONTH, Action: Action_ACTION_THROTTLE, ThrottleBps: 1000})
+	if err := m.SetPolicy(&Policy{
+		Email:  "moved@example",
+		Quotas: []*Quota{{LimitBytes: 500 * gb, Window: Window_WINDOW_MONTH, Action: Action_ACTION_THROTTLE}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Far more than this server's whole allowance, spent elsewhere.
+	if err := m.AddUsage("moved@example", "", 300*gb, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := m.ServerUsage().GetUsedBytes(); got != 0 {
+		t.Fatalf("server allowance counted %d restored bytes, want 0", got)
+	}
+	if m.ServerUsage().GetExceeded() {
+		t.Fatal("a restored baseline exhausted this server's allowance")
+	}
+	if got := m.Usage("moved@example").GetQuotas()[0].GetUsedBytes(); got != 300*gb {
+		t.Fatalf("the user's own quota shows %d, want the restored 300 GB", got)
+	}
+
+	// Real traffic still counts towards both.
+	m.Attach("moved@example", 0, "in", "1.1.1.1").Count(shaper.Down, 1*gb)
+	if got := m.ServerUsage().GetUsedBytes(); got != 1*gb {
+		t.Fatalf("server allowance = %d after 1 GB of real traffic, want 1 GB", got)
+	}
+}
+
 // --- persistence -----------------------------------------------------------
 
 func TestStateSurvivesARestart(t *testing.T) {

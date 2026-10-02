@@ -228,9 +228,11 @@ was unreachable does not outlive the next sync.
 The panel is the ultimate source of truth for what a subscription has spent.
 After a state file is lost, a server is rebuilt, or a user moves between
 servers, `AddUsage` restores the month-to-date figure. The bytes count towards
-every quota they would have counted towards had they really been carried, so
-restoring a baseline past the limit blocks the user immediately — which is the
-point.
+every quota of the user's they would have counted towards had they really been
+carried, so restoring a baseline past the limit blocks the user immediately —
+which is the point. They do **not** count towards the server allowance: that is
+what this host carried, and a baseline restored after a move was carried by
+another server.
 
 ---
 

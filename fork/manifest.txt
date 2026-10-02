@@ -23,6 +23,7 @@ common/shaper/**
 app/dispatcher/ratelimit.go
 app/dispatcher/ratelimit_test.go
 app/dispatcher/fork_usage.go
+app/dispatcher/fork_wraplink_test.go
 
 # ── Per-user policy, quotas and usage, plus its management API ──────────────
 app/tariff/**

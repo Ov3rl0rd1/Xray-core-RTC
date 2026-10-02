@@ -187,34 +187,85 @@ var shapers = shaper.New(shaper.Config{Resolve: LimitsFor})
 // user. up is client to internet, down is internet to client. When nothing is
 // configured that would touch this user's traffic, the writers are returned
 // untouched, so the feature costs nothing at all when it is not in use.
+//
+// This is the hook for links the dispatcher builds itself (Dispatch → getLink):
+// olcRTC, VMess, Trojan, Shadowsocks and every mux sub-stream. Links handed
+// over whole (DispatchLink → WrapLink: VLESS and Hysteria) go through
+// rateLimitWrapLink instead; between them every connection is hooked once.
 func rateLimitLink(ctx context.Context, d *DefaultDispatcher, user *protocol.MemoryUser, up, down buf.Writer) (buf.Writer, buf.Writer) {
+	h := attachUser(ctx, d.stats, user)
+	up = wrapUser(ctx, up, shaper.Up, h.upFlow, h.meter, h.upCounter)
+	down = wrapUser(ctx, down, shaper.Down, h.downFlow, h.meter, h.downCounter)
+	return up, down
+}
+
+// rateLimitWrapLink is rateLimitLink for a link handed to DispatchLink whole,
+// which is how VLESS and Hysteria dispatch: there the uplink arrives as a
+// reader (the client's own stream) rather than a writer, so it is shaped as it
+// is read. Without this the plan, the quotas and the accounting would apply to
+// every protocol except the two that carry nearly all the traffic.
+func rateLimitWrapLink(ctx context.Context, sm stats.Manager, user *protocol.MemoryUser, up buf.Reader, down buf.Writer) (buf.Reader, buf.Writer) {
+	h := attachUser(ctx, sm, user)
+	up = wrapUserReader(ctx, up, h.upFlow, h.meter, h.upCounter)
+	down = wrapUser(ctx, down, shaper.Down, h.downFlow, h.meter, h.downCounter)
+	return up, down
+}
+
+// userHook is what one connection of one user carries: their shaping flows,
+// the policy store's meter, and the per-inbound counters. Any of it may be nil.
+type userHook struct {
+	upFlow, downFlow       *shaper.Flow
+	meter                  UsageMeter
+	upCounter, downCounter stats.Counter
+}
+
+func attachUser(ctx context.Context, sm stats.Manager, user *protocol.MemoryUser) userHook {
 	su := shaper.User{Email: user.Email, Level: user.Level}
 	device := deviceKey(ctx)
 	tag := inboundTag(ctx)
+
+	var h userHook
 
 	// The meter comes first. Attaching it is what makes the policy store
 	// publish this user's current enforcement — their plan, minus whatever
 	// their quotas have taken away — and the shaper reads that a few lines
 	// below. The other order would shape a user's first connection by the
 	// default plan.
-	meter := attachMeter(user.Email, user.Level, tag, device)
-	if meter != nil {
+	h.meter = attachMeter(user.Email, user.Level, tag, device)
+	if h.meter != nil {
 		// The meter is shared by both directions, so it is released when the
 		// connection's context ends rather than by either writer's Close.
-		context.AfterFunc(ctx, meter.Release)
+		context.AfterFunc(ctx, h.meter.Release)
 	}
 
-	upCounter, downCounter := inboundCounters(d.stats, user.Email, tag)
+	h.upCounter, h.downCounter = inboundCounters(sm, user.Email, tag)
 
-	var upFlow, downFlow *shaper.Flow
 	if !LimitsFor(su).Unlimited() {
-		upFlow = shapers.Attach(su, device, shaper.Up)
-		downFlow = shapers.Attach(su, device, shaper.Down)
+		h.upFlow = shapers.Attach(su, device, shaper.Up)
+		h.downFlow = shapers.Attach(su, device, shaper.Down)
 	}
 
-	up = wrapUser(ctx, up, shaper.Up, upFlow, meter, upCounter)
-	down = wrapUser(ctx, down, shaper.Down, downFlow, meter, downCounter)
-	return up, down
+	if h.meter != nil || h.upFlow != nil {
+		noSplice(ctx)
+	}
+	return h
+}
+
+// noSplice keeps a shaped or metered connection out of the kernel.
+//
+// XTLS Vision hands a connection to splice(2) once the inner TLS is up, and
+// from then on bytes go socket to socket without passing through a single
+// writer — so through no shaper, no quota and no counter. A user on a plan
+// would be capped for their handshake and unlimited for everything after it.
+// 3 is upstream's "never splice"; Vision only ever promotes 2 to 1, so setting
+// it here, before any data has moved, holds for the life of the connection.
+//
+// The cost is a copy through user space for Vision traffic of limited users,
+// which is the price of being able to limit it at all.
+func noSplice(ctx context.Context) {
+	if inb := session.InboundFromContext(ctx); inb != nil {
+		inb.CanSpliceCopy = 3
+	}
 }
 
 func wrapUser(ctx context.Context, w buf.Writer, dir shaper.Direction, flow *shaper.Flow, meter UsageMeter, counter stats.Counter) buf.Writer {
@@ -324,4 +375,63 @@ func (w *userWriter) Close() error {
 func (w *userWriter) Interrupt() {
 	w.flow.Release()
 	common.Interrupt(w.writer)
+}
+
+func wrapUserReader(ctx context.Context, r buf.Reader, flow *shaper.Flow, meter UsageMeter, counter stats.Counter) buf.Reader {
+	if flow == nil && meter == nil && counter == nil {
+		return r
+	}
+	if flow != nil {
+		context.AfterFunc(ctx, flow.Release)
+	}
+	return &userReader{ctx: ctx, reader: r, flow: flow, meter: meter, counter: counter}
+}
+
+// userReader is userWriter for the uplink of a link handed over whole: it
+// applies the same checks to what it has just read, before passing it on.
+// Holding a read back is what slows the client down — the bytes stay in its
+// socket, and TCP or QUIC flow control does the rest.
+type userReader struct {
+	ctx     context.Context //nolint:containedctx // the reader interface carries no ctx
+	reader  buf.Reader
+	flow    *shaper.Flow
+	meter   UsageMeter
+	counter stats.Counter
+}
+
+func (r *userReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	mb, err := r.reader.ReadMultiBuffer()
+	n := int(mb.Len())
+	if n == 0 {
+		return mb, err
+	}
+	if r.meter != nil && r.meter.Blocked() {
+		buf.ReleaseMulti(mb)
+		return nil, errors.New("dispatcher: traffic refused: ", r.meter.BlockReason())
+	}
+	if werr := r.flow.Wait(r.ctx, n); werr != nil {
+		buf.ReleaseMulti(mb)
+		return nil, werr
+	}
+	if r.meter != nil {
+		if werr := r.meter.Wait(r.ctx, shaper.Up, n); werr != nil {
+			buf.ReleaseMulti(mb)
+			return nil, werr
+		}
+		r.meter.Count(shaper.Up, int64(n))
+	}
+	if r.counter != nil {
+		r.counter.Add(int64(n))
+	}
+	return mb, err
+}
+
+func (r *userReader) Interrupt() {
+	r.flow.Release()
+	common.Interrupt(r.reader)
+}
+
+func (r *userReader) Close() error {
+	r.flow.Release()
+	return common.Close(r.reader)
 }

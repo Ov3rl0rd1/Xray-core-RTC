@@ -1,5 +1,5 @@
 diff --git a/app/dispatcher/default.go b/app/dispatcher/default.go
-index 2717df5f..5810f8e3 100644
+index 2717df5f..ba27357b 100644
 --- a/app/dispatcher/default.go
 +++ b/app/dispatcher/default.go
 @@ -182,6 +182,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
@@ -14,3 +14,17 @@ index 2717df5f..5810f8e3 100644
  	}
  
  	return inboundLink, outboundLink
+@@ -194,6 +199,13 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
+ 		user = sessionInbound.User
+ 	}
+ 
++	if user != nil && len(user.Email) > 0 {
++		// The same per-user hook as getLink, for links handed over whole
++		// (VLESS, Hysteria). Inside the timeout wrapper, which sniffing needs
++		// on the outside; see ratelimit.go.
++		link.Reader, link.Writer = rateLimitWrapLink(ctx, statsManager, user, link.Reader, link.Writer)
++	}
++
+ 	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
+ 
+ 	if user != nil && len(user.Email) > 0 {

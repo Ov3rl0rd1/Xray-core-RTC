@@ -1,6 +1,7 @@
 package tariff
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -180,7 +181,11 @@ func (mt *Meter) Blocked() bool {
 	if mt == nil {
 		return false
 	}
-	return mt.denied || mt.u.eff.Load().blocked
+	if mt.denied {
+		return true
+	}
+	eff := mt.u.eff.Load()
+	return eff.blocked || eff.on(mt.inb.tag).blocked
 }
 
 // BlockReason explains a Blocked meter, for the error the client sees in the
@@ -192,7 +197,29 @@ func (mt *Meter) BlockReason() string {
 	if mt.denied {
 		return "device limit"
 	}
-	return mt.u.eff.Load().reason
+	eff := mt.u.eff.Load()
+	if eff.blocked {
+		return eff.reason
+	}
+	return eff.on(mt.inb.tag).reason
+}
+
+// Wait holds a write back while the inbound it travels through is throttled
+// by an exhausted per-inbound quota. It returns at once otherwise, which is
+// the case on every write of a user with no such quota exhausted: one atomic
+// load and a nil check.
+//
+// The user-wide throttle does not come through here: it lowers the user's
+// plan, and the shaper enforces that.
+func (mt *Meter) Wait(ctx context.Context, dir shaper.Direction, n int) error {
+	if mt == nil || n <= 0 {
+		return nil
+	}
+	bps := mt.u.eff.Load().on(mt.inb.tag).throttleBPS
+	if bps <= 0 {
+		return nil
+	}
+	return mt.inb.throttleAt(bps).wait(ctx, dir, n)
 }
 
 // Release gives up the connection's device and user references. It is

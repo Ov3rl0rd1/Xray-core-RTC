@@ -19,6 +19,58 @@ type effective struct {
 	limits  shaper.Limits
 	blocked bool
 	reason  string
+
+	// scoped is what exhausted quotas naming one inbound do to that inbound
+	// alone, keyed by tag. Nil when there are none, which is the common case
+	// and keeps the write path to a single nil check.
+	//
+	// The whole point of a per-inbound allowance is that it is per inbound:
+	// twenty gigabytes on the CPU-hungry olcRTC profile running out must stop
+	// or slow olcRTC, not take the user's VLESS and Hysteria down with it.
+	// Folding it into limits/blocked above, as this used to, did exactly that.
+	scoped map[string]scopedEffect
+}
+
+// scopedEffect is the consequence of an exhausted per-inbound quota.
+type scopedEffect struct {
+	blocked     bool
+	throttleBPS int64
+	reason      string
+}
+
+// inScope folds one exhausted per-inbound quota into an effective. NOTIFY
+// changes nothing here, as for the user-wide case.
+func (e *effective) inScope(tag string, a Action, throttleBPS int64, reason string) {
+	if a != Action_ACTION_BLOCK && (a != Action_ACTION_THROTTLE || throttleBPS <= 0) {
+		return
+	}
+	if e.scoped == nil {
+		e.scoped = make(map[string]scopedEffect)
+	}
+	s := e.scoped[tag]
+	switch a {
+	case Action_ACTION_BLOCK:
+		s.blocked = true
+		s.reason = reason
+	case Action_ACTION_THROTTLE:
+		// Two throttles on one inbound: the slower one wins, as it would for
+		// the user-wide throttle.
+		if s.throttleBPS == 0 || throttleBPS < s.throttleBPS {
+			s.throttleBPS = throttleBPS
+		}
+		if !s.blocked {
+			s.reason = reason
+		}
+	}
+	e.scoped[tag] = s
+}
+
+// on returns what the per-inbound quotas do to traffic through tag.
+func (e *effective) on(tag string) scopedEffect {
+	if e.scoped == nil {
+		return scopedEffect{}
+	}
+	return e.scoped[tag]
 }
 
 // inboundUsage is a user's traffic through one inbound. Separating traffic by
@@ -29,6 +81,12 @@ type inboundUsage struct {
 	tag  string
 	up   atomic.Uint64
 	down atomic.Uint64
+
+	// throttle is the rate this user's traffic through this inbound is held
+	// to while a per-inbound THROTTLE quota is exhausted. Created on the first
+	// write that needs it and shared by every connection of the user on the
+	// inbound, so ten connections get one allowance between them, not ten.
+	throttle atomic.Pointer[inboundThrottle]
 }
 
 // deviceState is one source of a user's traffic.

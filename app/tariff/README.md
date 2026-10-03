@@ -145,6 +145,16 @@ so a fleet across regions agrees on when the month turned over.
   write**, so a quota running out during a download stops that download rather
   than waiting for a reconnect.
 
+**A quota with an `inbound_tag` acts on that inbound only.** Twenty gigabytes
+on the CPU-hungry olcRTC profile running out blocks — or throttles — olcRTC,
+and the user's VLESS and Hysteria carry on at their plan. (It used to apply to
+the whole user, which turned a cap on one profile into a cut-off of the VPN.)
+A per-inbound `THROTTLE` holds that inbound to `throttle_bps` in each
+direction, shared by all of the user's connections on it, and leaves the plan
+and its boost untouched; a quota *without* a tag still lowers the plan itself.
+`GetUsage` reports such a quota as `exceeded` in its `QuotaState`; the user's
+own `blocked` stays false, because the user is not.
+
 **A policy push does not reset a quota.** Spent bytes carry over for every quota
 whose terms are unchanged. Without that, a panel syncing on a timer would hand
 every user a fresh allowance on every sync, and nobody would notice until the
@@ -196,7 +206,7 @@ client reconnecting every few seconds does not produce an event storm.
 | `GetUsage` | What a user (or everyone) has spent: totals, per inbound, per quota, devices, effective caps, whether they are blocked and why. |
 | `AddUsage` | Add to the counters without traffic having crossed this server. |
 | `ResetUsage` | Clear a user's counters and re-arm their quotas. Empty email resets the server allowance. |
-| `SetServerQuota` / `SetConfig` | The host allowance and the manager's own settings. |
+| `SetServerQuota` / `SetConfig` | The host allowance and the manager's own settings. `SetConfig` never changes the state file's path: that is the host's (`XRAY_TARIFF_STATE`), and a config pushed without one used to switch persistence off. |
 | `GetStatus` | Users, connections, devices, the server allowance, the live config. |
 | `Flush` | Write the state file now. Worth calling before a planned restart. |
 | `StreamEvents` | Changes as they happen. |

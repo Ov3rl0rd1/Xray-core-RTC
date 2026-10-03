@@ -199,6 +199,13 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 		user = sessionInbound.User
 	}
 
+	if user != nil && len(user.Email) > 0 {
+		// The same per-user hook as getLink, for links handed over whole
+		// (VLESS, Hysteria). Inside the timeout wrapper, which sniffing needs
+		// on the outside; see ratelimit.go.
+		link.Reader, link.Writer = rateLimitWrapLink(ctx, statsManager, user, link.Reader, link.Writer)
+	}
+
 	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
 
 	if user != nil && len(user.Email) > 0 {

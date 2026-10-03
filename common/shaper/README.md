@@ -7,6 +7,21 @@ where tariffs are chosen, and it applies to **every protocol at once** — VLESS
 Hysteria, olcRTC, anything — because the dispatcher is the single point every
 proxied connection crosses.
 
+It crosses it by one of two doors, and the hook has to be at both. Protocols
+that let the dispatcher build the link (`Dispatch` → `getLink`: olcRTC, VMess,
+Trojan, Shadowsocks, every mux sub-stream) are wrapped there; VLESS and
+Hysteria hand over a link of their own (`DispatchLink` → `WrapLink`), and are
+wrapped there — the uplink as a reader, since that is what it is on that path.
+For a while only the first door had it, which left exactly the two protocols
+that carry nearly all the traffic unshaped and unmetered.
+
+**A shaped or metered user is never spliced.** XTLS Vision hands a connection
+to `splice(2)` once the inner TLS is up, after which bytes go socket to socket
+without passing through any writer. The hook therefore sets the connection's
+`CanSpliceCopy` to "never" before data moves. That costs a user-space copy for
+Vision traffic of limited users; without it, measured on a real Vision link, a
+5 MB/s plan ran at 400 MB/s and the ledger recorded only the handshake.
+
 **Contents:** [Why not BBR or Brutal](#why-not-bbr-or-brutal) ·
 [What it does](#what-it-does) · [Tariffs](#tariffs) ·
 [Tuning](#tuning) · [Cost](#cost) · [Plugging in a policy store](#plugging-in-a-policy-store)

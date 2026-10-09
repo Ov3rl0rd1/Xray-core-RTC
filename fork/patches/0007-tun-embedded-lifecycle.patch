@@ -1,0 +1,184 @@
+diff --git a/proxy/tun/handler.go b/proxy/tun/handler.go
+index 56fe5653..26f9171f 100644
+--- a/proxy/tun/handler.go
++++ b/proxy/tun/handler.go
+@@ -2,9 +2,6 @@ package tun
+ 
+ import (
+ 	"context"
+-	"net/netip"
+-	"strings"
+-	"syscall"
+ 
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+@@ -19,7 +16,6 @@ import (
+ 	"github.com/xtls/xray-core/features/routing"
+ 	"github.com/xtls/xray-core/features/stats"
+ 	"github.com/xtls/xray-core/transport"
+-	"github.com/xtls/xray-core/transport/internet"
+ 	"github.com/xtls/xray-core/transport/internet/stat"
+ )
+ 
+@@ -35,6 +31,7 @@ type Handler struct {
+ 	sniffingRequest session.SniffingRequest
+ 	uplinkCounter   stats.Counter
+ 	downlinkCounter stats.Counter
++	bound           *InterfaceUpdater // fork: see fork_bind.go
+ }
+ 
+ // ConnectionHandler interface with the only method that stack is going to push new connections to
+@@ -98,26 +95,9 @@ func (t *Handler) Start() error {
+ 		if t.config.AutoOutboundsInterface == "auto" {
+ 			t.config.AutoOutboundsInterface = ""
+ 		}
+-		updater = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
+-		updater.Update()
+-		internet.RegisterDialerController(func(network, address string, c syscall.RawConn) error {
+-			iface := updater.Get()
+-			if iface == nil {
+-				errors.LogInfo(context.Background(), "[tun] falied to set interface > iface == nil")
+-				return nil
+-			}
+-			return c.Control(func(fd uintptr) {
+-				addrPort, _ := netip.ParseAddrPort(address)
+-				// skip loopback
+-				if addrPort.Addr().IsLoopback() || strings.HasPrefix(strings.ToLower(address), "localhost:") {
+-					return
+-				}
+-				err := setinterface(network, address, fd, iface)
+-				if err != nil {
+-					errors.LogInfoInner(context.Background(), err, "[tun] falied to set interface")
+-				}
+-			})
+-		})
++		// fork: registered once per process and fail-closed; see fork_bind.go.
++		t.bound = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
++		bindOutbounds(t.bound)
+ 	}
+ 
+ 	errors.LogInfo(t.ctx, tunName, " created")
+@@ -171,6 +151,8 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+ 		return
+ 	}
+ 	source := net.DestinationFromAddr(remote)
++	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
++	defer untrack()
+ 	if t.uplinkCounter != nil || t.downlinkCounter != nil {
+ 		conn = &stat.CounterConnection{
+ 			Connection:   conn,
+@@ -214,7 +196,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+ 
+ // Close implements common.Closable.
+ func (t *Handler) Close() error {
+-	return errors.Combine(common.CloseIfExists(t.stack), common.CloseIfExists(t.tun))
++	err := errors.Combine(common.CloseIfExists(t.stack), common.CloseIfExists(t.tun))
++	unbindOutbounds(t.bound) // fork: see fork_bind.go
++	return err
+ }
+ 
+ // Network implements proxy.Inbound
+diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
+index 8584616e..8057abd7 100644
+--- a/proxy/tun/stack_gvisor.go
++++ b/proxy/tun/stack_gvisor.go
+@@ -111,7 +111,9 @@ func (t *stackGVisor) Start() error {
+ 		srcIP := net.IPAddress(id.RemoteAddress.AsSlice())
+ 		dstIP := net.IPAddress(id.LocalAddress.AsSlice())
+ 		if srcIP == nil || dstIP == nil {
+-			panic(id)
++			// fork: dropped, not panic(id). This runs on a gVisor goroutine, so a
++			// panic here is not recoverable and, in an embedded core, ends the host.
++			return true
+ 		}
+ 		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
+ 		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))
+diff --git a/proxy/tun/tun_windows.go b/proxy/tun/tun_windows.go
+index 2097b689..3646342f 100644
+--- a/proxy/tun/tun_windows.go
++++ b/proxy/tun/tun_windows.go
+@@ -6,10 +6,10 @@ import (
+ 	"context"
+ 	"crypto/md5"
+ 	"encoding/binary"
+-	go_errors "errors"
+ 	"net"
+ 	"net/netip"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 	"unsafe"
+ 
+@@ -17,7 +17,6 @@ import (
+ 	"golang.org/x/sys/windows"
+ 	"golang.zx2c4.com/wintun"
+ 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+-	"gvisor.dev/gvisor/pkg/buffer"
+ 	"gvisor.dev/gvisor/pkg/tcpip"
+ 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+ )
+@@ -39,6 +38,11 @@ type WindowsTun struct {
+ 	cbr      winipcfg.ChangeCallback
+ 	cbi      winipcfg.ChangeCallback
+ 	closed   bool
++
++	// fork: the session is ended under in-flight reads and writes in an embedded
++	// host that stops and starts the core; see fork_tun_windows.go.
++	ending   atomic.Bool
++	inflight atomic.Int32
+ }
+ 
+ // WindowsTun implements Tun
+@@ -216,6 +220,7 @@ func (t *WindowsTun) Close() error {
+ 		return nil
+ 	}
+ 	t.closed = true
++	t.drainBeforeEnd() // fork: no ring access may outlive the session
+ 
+ 	if t.cbr != nil {
+ 		t.cbr.Unregister()
+@@ -258,11 +263,10 @@ func (t *WindowsTun) Index() (int, error) {
+ 
+ // WritePacket implements GVisorDevice method to write one packet to the tun device
+ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
+-	t.RLock()
+-	defer t.RUnlock()
+-	if t.closed {
++	if !t.enter() { // fork: see fork_tun_windows.go
+ 		return &tcpip.ErrClosedForSend{}
+ 	}
++	defer t.leave()
+ 
+ 	// request buffer from Wintun
+ 	packet, err := t.session.AllocateSendPacket(packetBuffer.Size())
+@@ -286,28 +290,11 @@ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
+ // It is expected that the method will not block, rather return ErrQueueEmpty when there is nothing on the line,
+ // which will make the stack call Wait which should implement desired push-back
+ func (t *WindowsTun) ReadPacket() (byte, *stack.PacketBuffer, error) {
+-	packet, err := t.session.ReceivePacket()
+-	if go_errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+-		return 0, nil, ErrQueueEmpty
+-	}
+-	if err != nil {
+-		return 0, nil, err
+-	}
+-
+-	version := packet[0] >> 4
+-	packetBuffer := buffer.MakeWithView(buffer.NewViewWithData(packet))
+-	return version, stack.NewPacketBuffer(stack.PacketBufferOptions{
+-		Payload:           packetBuffer,
+-		IsForwardedPacket: true,
+-		OnRelease: func() {
+-			t.session.ReleaseReceivePacket(packet)
+-		},
+-	}), nil
++	return t.forkReadPacket() // fork: see fork_tun_windows.go
+ }
+ 
+ func (t *WindowsTun) Wait() {
+-	procyield(1)
+-	_, _ = windows.WaitForSingleObject(t.readWait, windows.INFINITE)
++	t.forkWait() // fork: see fork_tun_windows.go
+ }
+ 
+ func (t *WindowsTun) newEndpoint() (stack.LinkEndpoint, error) {

@@ -44,6 +44,7 @@
 # to hand it over directly.
 = internal/client/fork_tunnel.go
 = pkg/olcrtc/client/fork_dial.go
+= pkg/olcrtc/client/fork_protect.go
 = pkg/olcrtc/tunnel/fork_dial.go
 
 # keyexchange: the whole package is ours. It replaces the shared room key with

@@ -6,10 +6,10 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/binary"
-	go_errors "errors"
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -17,7 +17,6 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
@@ -39,6 +38,11 @@ type WindowsTun struct {
 	cbr      winipcfg.ChangeCallback
 	cbi      winipcfg.ChangeCallback
 	closed   bool
+
+	// fork: the session is ended under in-flight reads and writes in an embedded
+	// host that stops and starts the core; see fork_tun_windows.go.
+	ending   atomic.Bool
+	inflight atomic.Int32
 }
 
 // WindowsTun implements Tun
@@ -216,6 +220,7 @@ func (t *WindowsTun) Close() error {
 		return nil
 	}
 	t.closed = true
+	t.drainBeforeEnd() // fork: no ring access may outlive the session
 
 	if t.cbr != nil {
 		t.cbr.Unregister()
@@ -258,11 +263,10 @@ func (t *WindowsTun) Index() (int, error) {
 
 // WritePacket implements GVisorDevice method to write one packet to the tun device
 func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
-	t.RLock()
-	defer t.RUnlock()
-	if t.closed {
+	if !t.enter() { // fork: see fork_tun_windows.go
 		return &tcpip.ErrClosedForSend{}
 	}
+	defer t.leave()
 
 	// request buffer from Wintun
 	packet, err := t.session.AllocateSendPacket(packetBuffer.Size())
@@ -286,28 +290,11 @@ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
 // It is expected that the method will not block, rather return ErrQueueEmpty when there is nothing on the line,
 // which will make the stack call Wait which should implement desired push-back
 func (t *WindowsTun) ReadPacket() (byte, *stack.PacketBuffer, error) {
-	packet, err := t.session.ReceivePacket()
-	if go_errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
-		return 0, nil, ErrQueueEmpty
-	}
-	if err != nil {
-		return 0, nil, err
-	}
-
-	version := packet[0] >> 4
-	packetBuffer := buffer.MakeWithView(buffer.NewViewWithData(packet))
-	return version, stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload:           packetBuffer,
-		IsForwardedPacket: true,
-		OnRelease: func() {
-			t.session.ReleaseReceivePacket(packet)
-		},
-	}), nil
+	return t.forkReadPacket() // fork: see fork_tun_windows.go
 }
 
 func (t *WindowsTun) Wait() {
-	procyield(1)
-	_, _ = windows.WaitForSingleObject(t.readWait, windows.INFINITE)
+	t.forkWait() // fork: see fork_tun_windows.go
 }
 
 func (t *WindowsTun) newEndpoint() (stack.LinkEndpoint, error) {

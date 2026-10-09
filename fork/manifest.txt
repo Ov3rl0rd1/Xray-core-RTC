@@ -32,6 +32,14 @@ app/tariff/**
 common/pause/pause.go
 transport/internet/hysteria/fork_pause.go
 
+# ── The TUN inbound as an embedded host needs it (libxray, Windows client) ──
+proxy/tun/fork_bind.go
+proxy/tun/fork_tracker.go
+proxy/tun/fork_tun_windows.go
+proxy/tun/fork_bind_test.go
+proxy/tun/fork_tracker_test.go
+common/session/fork_routed.go
+
 # ── libxray: the C ABI the mobile client links against ─────────────────────
 libxray/**
 main/distro/lib/lib.go

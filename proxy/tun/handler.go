@@ -2,9 +2,6 @@ package tun
 
 import (
 	"context"
-	"net/netip"
-	"strings"
-	"syscall"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -19,7 +16,6 @@ import (
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
-	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
@@ -35,6 +31,7 @@ type Handler struct {
 	sniffingRequest session.SniffingRequest
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
+	bound           *InterfaceUpdater // fork: see fork_bind.go
 }
 
 // ConnectionHandler interface with the only method that stack is going to push new connections to
@@ -98,26 +95,9 @@ func (t *Handler) Start() error {
 		if t.config.AutoOutboundsInterface == "auto" {
 			t.config.AutoOutboundsInterface = ""
 		}
-		updater = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
-		updater.Update()
-		internet.RegisterDialerController(func(network, address string, c syscall.RawConn) error {
-			iface := updater.Get()
-			if iface == nil {
-				errors.LogInfo(context.Background(), "[tun] falied to set interface > iface == nil")
-				return nil
-			}
-			return c.Control(func(fd uintptr) {
-				addrPort, _ := netip.ParseAddrPort(address)
-				// skip loopback
-				if addrPort.Addr().IsLoopback() || strings.HasPrefix(strings.ToLower(address), "localhost:") {
-					return
-				}
-				err := setinterface(network, address, fd, iface)
-				if err != nil {
-					errors.LogInfoInner(context.Background(), err, "[tun] falied to set interface")
-				}
-			})
-		})
+		// fork: registered once per process and fail-closed; see fork_bind.go.
+		t.bound = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
+		bindOutbounds(t.bound)
 	}
 
 	errors.LogInfo(t.ctx, tunName, " created")
@@ -171,6 +151,8 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 		return
 	}
 	source := net.DestinationFromAddr(remote)
+	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
+	defer untrack()
 	if t.uplinkCounter != nil || t.downlinkCounter != nil {
 		conn = &stat.CounterConnection{
 			Connection:   conn,
@@ -214,7 +196,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 
 // Close implements common.Closable.
 func (t *Handler) Close() error {
-	return errors.Combine(common.CloseIfExists(t.stack), common.CloseIfExists(t.tun))
+	err := errors.Combine(common.CloseIfExists(t.stack), common.CloseIfExists(t.tun))
+	unbindOutbounds(t.bound) // fork: see fork_bind.go
+	return err
 }
 
 // Network implements proxy.Inbound

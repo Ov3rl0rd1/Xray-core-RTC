@@ -219,6 +219,61 @@ func XrayIsPaused() (ret C.int) {
 	return 0
 }
 
+// XrayReloadRouting replaces the running instance's routing rules with those in
+// a JSON "routing" object, without a restart. Live connections keep their
+// route; new ones get the new rules. 0 on success, -1 with XrayLastError.
+//
+//export XrayReloadRouting
+func XrayReloadRouting(routingJSON *C.char) (ret C.int) {
+	defer guard("XrayReloadRouting", &ret)()
+
+	if err := reloadRouting(C.GoString(routingJSON)); err != nil {
+		setLastError(err)
+		return -1
+	}
+	setLastError(nil)
+	return 0
+}
+
+// XrayReplaceOutbound swaps the running outbound that has the given config's
+// tag for one built from it, without a restart: the TUN and every connection
+// not carried by the old outbound stay up. 0 on success, -1 with XrayLastError.
+//
+//export XrayReplaceOutbound
+func XrayReplaceOutbound(outboundJSON *C.char) (ret C.int) {
+	defer guard("XrayReplaceOutbound", &ret)()
+
+	if err := replaceOutbound(C.GoString(outboundJSON)); err != nil {
+		setLastError(err)
+		return -1
+	}
+	setLastError(nil)
+	return 0
+}
+
+// XrayConnections returns a JSON array of the connections the TUN inbound is
+// carrying: id, net, src, dst, target (sniffed), outbound tag, bytes up and
+// down, start time. Caller frees with XrayFree.
+//
+//export XrayConnections
+func XrayConnections() (ret *C.char) {
+	defer guardStr("XrayConnections", &ret)()
+
+	return C.CString(connectionsJSON())
+}
+
+// XrayCloseConnections closes the TUN connections whose ids are listed, comma
+// separated ("*" for all), so their applications reconnect under the current
+// rules. Returns how many were closed.
+//
+//export XrayCloseConnections
+func XrayCloseConnections(ids *C.char) (ret C.int) {
+	defer guard("XrayCloseConnections", &ret)()
+
+	setLastError(nil)
+	return C.int(closeConnections(C.GoString(ids)))
+}
+
 //export XrayVersion
 func XrayVersion() (ret *C.char) {
 	defer guardStr("XrayVersion", &ret)()

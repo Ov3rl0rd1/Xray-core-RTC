@@ -1,5 +1,5 @@
 diff --git a/app/dispatcher/default.go b/app/dispatcher/default.go
-index 2717df5f..ba27357b 100644
+index 2717df5f..cff0a751 100644
 --- a/app/dispatcher/default.go
 +++ b/app/dispatcher/default.go
 @@ -182,6 +182,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
@@ -28,3 +28,11 @@ index 2717df5f..ba27357b 100644
  	link.Reader = &buf.TimeoutWrapperReader{Reader: link.Reader}
  
  	if user != nil && len(user.Email) > 0 {
+@@ -486,6 +498,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
+ 	}
+ 
+ 	ob.Tag = handler.Tag()
++	session.NotifyRouted(ctx, ob) // fork: see common/session/fork_routed.go
+ 	if accessMessage := log.AccessMessageFromContext(ctx); accessMessage != nil {
+ 		if tag := handler.Tag(); tag != "" {
+ 			if inTag == "" {

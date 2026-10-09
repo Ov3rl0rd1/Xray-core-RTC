@@ -39,6 +39,10 @@ and **must** be released with `XrayFree` — it comes from C `malloc`, so
 | `int XraySleep(void)` | Pause background housekeeping while the device is idle. Idempotent. |
 | `int XrayWake(void)` | Resume it. Idempotent, and safe without a matching `XraySleep`. |
 | `int XrayIsPaused(void)` | `1` paused, `0` running, `-1` on failure. Diagnostics. |
+| `int XrayReloadRouting(const char* routingJSON)` | Replace the running instance's routing rules with those in a JSON `routing` object. No restart: live connections keep their route, new ones get the new rules. |
+| `int XrayReplaceOutbound(const char* outboundJSON)` | Swap the running outbound that has this config's `tag` for one built from it. No restart: the TUN and every connection not carried by the old outbound stay up. |
+| `char* XrayConnections(void)` | JSON array of the connections the TUN inbound is carrying: `id`, `net`, `src`, `dst`, `target` (sniffed), `outbound` tag, `up`/`down` bytes, `startedMs`. |
+| `int XrayCloseConnections(const char* ids)` | Close the listed TUN connections (comma-separated ids, or `*`), so their applications reconnect under the current rules. Returns how many were closed. |
 | `char* XrayVersion(void)` | Version string. |
 | `char* XrayLastError(void)` | Message from the last failed call; empty string if the last call succeeded. |
 | `void XrayFree(char* s)` | Release a string returned by this library. |
@@ -161,3 +165,23 @@ There is no socket-protect hook. On Android a `VpnService` needs outbound
 sockets protected from its own tunnel, or traffic loops; wiring that up means
 exposing a callback that reaches `internet.RegisterDialerController`. Add it
 before using this in a `VpnService`.
+
+### The TUN inbound in an embedded host
+
+A desktop client can let the core own the TUN (`"protocol": "tun"`) instead of
+running a separate bridge. Three things are different from upstream there, all
+because the core is started and stopped many times inside one process:
+
+- **Outbound binding is registered once and fails closed.** With
+  `autoOutboundsInterface` every socket the core opens is pinned to the physical
+  interface; when none can be found the socket is pinned to loopback, so a dial
+  fails instead of looping into the TUN. Upstream registered another dialer
+  controller on every start. See `proxy/tun/fork_bind.go`.
+- **Windows: no ring access outlives the wintun session.** Packets are copied out
+  of the receive ring and released at once, and `Close` wakes the reader and waits
+  for in-flight calls before ending the session. See `proxy/tun/fork_tun_windows.go`.
+- **olcRTC's WebRTC sockets follow the same binding** while a TUN is up.
+
+`XrayConnections` / `XrayCloseConnections` report on and act on that TUN's
+connections; `XrayReloadRouting` and `XrayReplaceOutbound` exist so that changing a
+split-tunnel rule or falling back to another protocol does not tear the adapter down.

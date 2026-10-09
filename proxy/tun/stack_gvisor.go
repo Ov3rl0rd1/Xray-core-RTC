@@ -111,7 +111,9 @@ func (t *stackGVisor) Start() error {
 		srcIP := net.IPAddress(id.RemoteAddress.AsSlice())
 		dstIP := net.IPAddress(id.LocalAddress.AsSlice())
 		if srcIP == nil || dstIP == nil {
-			panic(id)
+			// fork: dropped, not panic(id). This runs on a gVisor goroutine, so a
+			// panic here is not recoverable and, in an embedded core, ends the host.
+			return true
 		}
 		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
 		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))

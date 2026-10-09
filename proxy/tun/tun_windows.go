@@ -373,7 +373,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
 			index = r[i].InterfaceIndex
 		}
 	}
-	if indexWifi != 0 {
+	// fork: Wi-Fi wins only on metric. Upstream preferred any Wi-Fi outright, so a
+	// laptop on Ethernet with Wi-Fi also associated sent the whole VPN over the radio —
+	// higher and jitterier latency than the cable Windows itself would have used. The
+	// lowest combined metric is Windows' own choice of default route.
+	if indexWifi != 0 && (index == 0 || lowestMetricWifi < lowestMetric) {
 		index = indexWifi
 	}
 	return net.InterfaceByIndex(int(index))

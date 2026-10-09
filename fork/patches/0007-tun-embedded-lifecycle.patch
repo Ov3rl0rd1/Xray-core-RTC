@@ -94,7 +94,7 @@ index 8584616e..8057abd7 100644
  		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
  		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))
 diff --git a/proxy/tun/tun_windows.go b/proxy/tun/tun_windows.go
-index 2097b689..3646342f 100644
+index 2097b689..84142bbe 100644
 --- a/proxy/tun/tun_windows.go
 +++ b/proxy/tun/tun_windows.go
 @@ -6,10 +6,10 @@ import (
@@ -182,3 +182,16 @@ index 2097b689..3646342f 100644
  }
  
  func (t *WindowsTun) newEndpoint() (stack.LinkEndpoint, error) {
+@@ -386,7 +373,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
+ 			index = r[i].InterfaceIndex
+ 		}
+ 	}
+-	if indexWifi != 0 {
++	// fork: Wi-Fi wins only on metric. Upstream preferred any Wi-Fi outright, so a
++	// laptop on Ethernet with Wi-Fi also associated sent the whole VPN over the radio —
++	// higher and jitterier latency than the cable Windows itself would have used. The
++	// lowest combined metric is Windows' own choice of default route.
++	if indexWifi != 0 && (index == 0 || lowestMetricWifi < lowestMetric) {
+ 		index = indexWifi
+ 	}
+ 	return net.InterfaceByIndex(int(index))

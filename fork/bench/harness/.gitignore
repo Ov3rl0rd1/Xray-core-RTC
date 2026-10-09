@@ -1,0 +1,2 @@
+# Copied from libxray by setup.sh at build time.
+lib_*.go

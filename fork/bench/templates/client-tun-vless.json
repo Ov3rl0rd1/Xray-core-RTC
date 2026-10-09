@@ -1,0 +1,138 @@
+{
+ "log": {
+  "loglevel": "warning",
+  "error": "@DIR@/client-vless-tun.log",
+  "access": "none"
+ },
+ "dns": {
+  "servers": [
+   "10.99.1.1"
+  ],
+  "queryStrategy": "UseIPv4"
+ },
+ "inbounds": [
+  {
+   "tag": "tun-in",
+   "protocol": "tun",
+   "port": 0,
+   "settings": {
+    "name": "xtun0",
+    "mtu": 1500,
+    "gateway": [
+     "198.18.0.1/30"
+    ],
+    "autoSystemRoutingTable": [
+     "0.0.0.0/1",
+     "128.0.0.0/1",
+     "10.99.0.1/32"
+    ],
+    "autoOutboundsInterface": "auto"
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false
+   }
+  },
+  {
+   "tag": "socks-in",
+   "listen": "127.0.0.1",
+   "port": 1080,
+   "protocol": "socks",
+   "settings": {
+    "auth": "noauth",
+    "udp": true
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false
+   }
+  }
+ ],
+ "outbounds": [
+  {
+   "tag": "proxy",
+   "protocol": "vless",
+   "settings": {
+    "vnext": [
+     {
+      "address": "10.99.0.1",
+      "port": 443,
+      "users": [
+       {
+        "id": "@UUID@",
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "level": 0
+       }
+      ]
+     }
+    ]
+   },
+   "streamSettings": {
+    "network": "tcp",
+    "security": "reality",
+    "realitySettings": {
+     "serverName": "www.example.com",
+     "fingerprint": "chrome",
+     "publicKey": "@PUB@",
+     "shortId": "a1b2",
+     "spiderX": ""
+    }
+   }
+  },
+  {
+   "tag": "direct",
+   "protocol": "freedom",
+   "settings": {
+    "domainStrategy": "UseIP"
+   }
+  },
+  {
+   "tag": "block",
+   "protocol": "blackhole"
+  }
+ ],
+ "routing": {
+  "domainStrategy": "AsIs",
+  "rules": [
+   {
+    "type": "field",
+    "ip": [
+     "224.0.0.0/4",
+     "255.255.255.255/32",
+     "ff00::/8"
+    ],
+    "outboundTag": "block"
+   },
+   {
+    "type": "field",
+    "ip": [
+     "100.64.0.0/10",
+     "127.0.0.0/8",
+     "169.254.0.0/16",
+     "172.16.0.0/12",
+     "192.168.0.0/16",
+     "fc00::/7",
+     "fe80::/10",
+     "::1/128"
+    ],
+    "outboundTag": "direct"
+   },
+   {
+    "type": "field",
+    "network": "tcp,udp",
+    "outboundTag": "proxy"
+   }
+  ]
+ }
+}

@@ -79,7 +79,7 @@ index 56fe5653..26f9171f 100644
  
  // Network implements proxy.Inbound
 diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
-index 8584616e..8057abd7 100644
+index 8584616e..0255211b 100644
 --- a/proxy/tun/stack_gvisor.go
 +++ b/proxy/tun/stack_gvisor.go
 @@ -111,7 +111,9 @@ func (t *stackGVisor) Start() error {
@@ -93,6 +93,47 @@ index 8584616e..8057abd7 100644
  		}
  		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
  		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))
+@@ -121,6 +123,12 @@ func (t *stackGVisor) Start() error {
+ 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, t.handleICMPv4Packet)
+ 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, t.handleICMPv6Packet)
+ 
++	// fork: only now may packets arrive (fork_stack_order.go).
++	if err := attachNIC(ipStack, linkEndpoint); err != nil {
++		ipStack.Close()
++		return err
++	}
++
+ 	t.stack = ipStack
+ 	t.endpoint = linkEndpoint
+ 
+@@ -212,25 +220,8 @@ func createStack(ep stack.LinkEndpoint) (*stack.Stack, error) {
+ 		HandleLocal:        false,
+ 	}
+ 	gStack := stack.New(opts)
+-
+-	err := gStack.CreateNIC(defaultNIC, ep)
+-	if err != nil {
+-		return nil, errors.New(err.String())
+-	}
+-
+-	gStack.SetRouteTable([]tcpip.Route{
+-		{Destination: header.IPv4EmptySubnet, NIC: defaultNIC},
+-		{Destination: header.IPv6EmptySubnet, NIC: defaultNIC},
+-	})
+-
+-	err = gStack.SetSpoofing(defaultNIC, true)
+-	if err != nil {
+-		return nil, errors.New(err.String())
+-	}
+-	err = gStack.SetPromiscuousMode(defaultNIC, true)
+-	if err != nil {
+-		return nil, errors.New(err.String())
+-	}
++	// fork: the NIC is attached by Start, after the handlers (fork_stack_order.go).
++	var err tcpip.Error
+ 
+ 	cOpt := tcpip.CongestionControlOption("cubic")
+ 	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &cOpt)
 diff --git a/proxy/tun/tun_windows.go b/proxy/tun/tun_windows.go
 index 2097b689..84142bbe 100644
 --- a/proxy/tun/tun_windows.go

@@ -123,6 +123,12 @@ func (t *stackGVisor) Start() error {
 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, t.handleICMPv4Packet)
 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, t.handleICMPv6Packet)
 
+	// fork: only now may packets arrive (fork_stack_order.go).
+	if err := attachNIC(ipStack, linkEndpoint); err != nil {
+		ipStack.Close()
+		return err
+	}
+
 	t.stack = ipStack
 	t.endpoint = linkEndpoint
 
@@ -214,25 +220,8 @@ func createStack(ep stack.LinkEndpoint) (*stack.Stack, error) {
 		HandleLocal:        false,
 	}
 	gStack := stack.New(opts)
-
-	err := gStack.CreateNIC(defaultNIC, ep)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
-
-	gStack.SetRouteTable([]tcpip.Route{
-		{Destination: header.IPv4EmptySubnet, NIC: defaultNIC},
-		{Destination: header.IPv6EmptySubnet, NIC: defaultNIC},
-	})
-
-	err = gStack.SetSpoofing(defaultNIC, true)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
-	err = gStack.SetPromiscuousMode(defaultNIC, true)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
+	// fork: the NIC is attached by Start, after the handlers (fork_stack_order.go).
+	var err tcpip.Error
 
 	cOpt := tcpip.CongestionControlOption("cubic")
 	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &cOpt)

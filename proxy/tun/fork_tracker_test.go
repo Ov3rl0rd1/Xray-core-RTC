@@ -27,7 +27,7 @@ func (f *fakePacketConn) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	return mb, nil
 }
 func (f *fakePacketConn) WriteMultiBuffer(mb buf.MultiBuffer) error { buf.ReleaseMulti(mb); return nil }
-func (f *fakePacketConn) Close() error                             { f.closed = true; return nil }
+func (f *fakePacketConn) Close() error                              { f.closed = true; return nil }
 
 func TestTrackerKeepsThePacketInterface(t *testing.T) {
 	src := net.UDPDestination(net.ParseAddress("198.18.0.1"), 50000)

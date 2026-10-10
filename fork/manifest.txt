@@ -37,8 +37,11 @@ proxy/tun/fork_bind.go
 proxy/tun/fork_tracker.go
 proxy/tun/fork_tun_windows.go
 proxy/tun/fork_stack_order.go
+proxy/tun/fork_open_windows.go
+proxy/tun/fork_identity.go
 proxy/tun/fork_bind_test.go
 proxy/tun/fork_tracker_test.go
+proxy/tun/fork_identity_test.go
 common/session/fork_routed.go
 
 # ── libxray: the C ABI the mobile client links against ─────────────────────

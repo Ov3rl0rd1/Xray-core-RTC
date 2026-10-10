@@ -135,12 +135,14 @@ index 8584616e..0255211b 100644
  	cOpt := tcpip.CongestionControlOption("cubic")
  	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &cOpt)
 diff --git a/proxy/tun/tun_windows.go b/proxy/tun/tun_windows.go
-index 2097b689..84142bbe 100644
+index 2097b689..3a55aed6 100644
 --- a/proxy/tun/tun_windows.go
 +++ b/proxy/tun/tun_windows.go
-@@ -6,10 +6,10 @@ import (
+@@ -4,12 +4,11 @@ package tun
+ 
+ import (
  	"context"
- 	"crypto/md5"
+-	"crypto/md5"
  	"encoding/binary"
 -	go_errors "errors"
  	"net"
@@ -150,7 +152,7 @@ index 2097b689..84142bbe 100644
  	"time"
  	"unsafe"
  
-@@ -17,7 +17,6 @@ import (
+@@ -17,7 +16,6 @@ import (
  	"golang.org/x/sys/windows"
  	"golang.zx2c4.com/wintun"
  	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -158,7 +160,7 @@ index 2097b689..84142bbe 100644
  	"gvisor.dev/gvisor/pkg/tcpip"
  	"gvisor.dev/gvisor/pkg/tcpip/stack"
  )
-@@ -39,6 +38,11 @@ type WindowsTun struct {
+@@ -39,6 +37,11 @@ type WindowsTun struct {
  	cbr      winipcfg.ChangeCallback
  	cbi      winipcfg.ChangeCallback
  	closed   bool
@@ -170,7 +172,24 @@ index 2097b689..84142bbe 100644
  }
  
  // WindowsTun implements Tun
-@@ -216,6 +220,7 @@ func (t *WindowsTun) Close() error {
+@@ -75,15 +78,7 @@ func NewTun(options *Config) (Tun, error) {
+ }
+ 
+ func open(name, desc string) (*wintun.Adapter, error) {
+-	// generate a deterministic GUID from the adapter name
+-	id := md5.Sum([]byte(name))
+-	guid := (*windows.GUID)(unsafe.Pointer(&id[0]))
+-	// try to create adapter anew
+-	adapter, err := wintun.CreateAdapter(name, desc, guid)
+-	if err == nil {
+-		return adapter, nil
+-	}
+-	return nil, err
++	return forkOpenAdapter(name, desc) // fork: one GUID per name is not enough; see fork_open_windows.go
+ }
+ 
+ func (t *WindowsTun) Start() (err error) {
+@@ -216,6 +211,7 @@ func (t *WindowsTun) Close() error {
  		return nil
  	}
  	t.closed = true
@@ -178,7 +197,7 @@ index 2097b689..84142bbe 100644
  
  	if t.cbr != nil {
  		t.cbr.Unregister()
-@@ -258,11 +263,10 @@ func (t *WindowsTun) Index() (int, error) {
+@@ -258,11 +254,10 @@ func (t *WindowsTun) Index() (int, error) {
  
  // WritePacket implements GVisorDevice method to write one packet to the tun device
  func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
@@ -192,7 +211,7 @@ index 2097b689..84142bbe 100644
  
  	// request buffer from Wintun
  	packet, err := t.session.AllocateSendPacket(packetBuffer.Size())
-@@ -286,28 +290,11 @@ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
+@@ -286,28 +281,11 @@ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
  // It is expected that the method will not block, rather return ErrQueueEmpty when there is nothing on the line,
  // which will make the stack call Wait which should implement desired push-back
  func (t *WindowsTun) ReadPacket() (byte, *stack.PacketBuffer, error) {
@@ -223,7 +242,7 @@ index 2097b689..84142bbe 100644
  }
  
  func (t *WindowsTun) newEndpoint() (stack.LinkEndpoint, error) {
-@@ -386,7 +373,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
+@@ -386,7 +364,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
  			index = r[i].InterfaceIndex
  		}
  	}

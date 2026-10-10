@@ -169,7 +169,7 @@ before using this in a `VpnService`.
 ### The TUN inbound in an embedded host
 
 A desktop client can let the core own the TUN (`"protocol": "tun"`) instead of
-running a separate bridge. Three things are different from upstream there, all
+running a separate bridge. Four things are different from upstream there, all
 because the core is started and stopped many times inside one process:
 
 - **Outbound binding is registered once and fails closed.** With
@@ -180,6 +180,12 @@ because the core is started and stopped many times inside one process:
 - **Windows: no ring access outlives the wintun session.** Packets are copied out
   of the receive ring and released at once, and `Close` wakes the reader and waits
   for in-flight calls before ending the session. See `proxy/tun/fork_tun_windows.go`.
+- **Windows: a restart does not wait on the previous adapter's removal.** Upstream
+  asks for one GUID per adapter name; when the device of the adapter just closed
+  is still being removed (or Windows deferred it), the same GUID fails after 15 s
+  with problem code 0x1F, and keeps failing. A name now maps to four GUIDs, one
+  still held by a device is passed over, and the first is upstream's, so a healthy
+  machine sees no change. See `proxy/tun/fork_open_windows.go`.
 - **olcRTC's WebRTC sockets follow the same binding** while a TUN is up.
 
 `XrayConnections` / `XrayCloseConnections` report on and act on that TUN's

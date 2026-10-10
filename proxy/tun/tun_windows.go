@@ -4,7 +4,6 @@ package tun
 
 import (
 	"context"
-	"crypto/md5"
 	"encoding/binary"
 	"net"
 	"net/netip"
@@ -79,15 +78,7 @@ func NewTun(options *Config) (Tun, error) {
 }
 
 func open(name, desc string) (*wintun.Adapter, error) {
-	// generate a deterministic GUID from the adapter name
-	id := md5.Sum([]byte(name))
-	guid := (*windows.GUID)(unsafe.Pointer(&id[0]))
-	// try to create adapter anew
-	adapter, err := wintun.CreateAdapter(name, desc, guid)
-	if err == nil {
-		return adapter, nil
-	}
-	return nil, err
+	return forkOpenAdapter(name, desc) // fork: one GUID per name is not enough; see fork_open_windows.go
 }
 
 func (t *WindowsTun) Start() (err error) {

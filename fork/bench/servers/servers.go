@@ -111,7 +111,7 @@ func gameServer(addr string) {
 		seen atomic.Int64
 	}
 	peers := map[string]*peer{}
-	var mu = make(chan struct{}, 1)
+	mu := make(chan struct{}, 1)
 	mu <- struct{}{}
 	go func() {
 		tick := time.NewTicker(time.Second / 60)

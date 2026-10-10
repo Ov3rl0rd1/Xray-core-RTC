@@ -7,14 +7,14 @@
 package main
 
 import (
-	"errors"
-	"regexp"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -33,13 +33,13 @@ var (
 )
 
 type gameStats struct {
-	mu      sync.Mutex
-	rtts    []time.Duration
-	sent    int64
-	recv    int64
-	stalls  int64
-	maxGap  time.Duration
-	errs    int64
+	mu     sync.Mutex
+	rtts   []time.Duration
+	sent   int64
+	recv   int64
+	stalls int64
+	maxGap time.Duration
+	errs   int64
 }
 
 var (

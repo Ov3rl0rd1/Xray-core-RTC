@@ -26,6 +26,7 @@ func (f *fakePacketConn) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	}
 	return mb, nil
 }
+
 func (f *fakePacketConn) WriteMultiBuffer(mb buf.MultiBuffer) error { buf.ReleaseMulti(mb); return nil }
 func (f *fakePacketConn) Close() error                              { f.closed = true; return nil }
 

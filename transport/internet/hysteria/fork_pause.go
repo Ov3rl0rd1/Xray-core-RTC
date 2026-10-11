@@ -140,13 +140,35 @@ func forkCleanClients(m *clientManager) {
 		active()
 		select {
 		case <-ticker.C:
-			m.RLock()
-			for _, c := range m.m {
-				c.clean()
-			}
-			m.RUnlock()
+			m.reap()
 		case <-forkWake:
 		}
+	}
+}
+
+// reap is one pass of upstream's clean loop, unchanged: close the sessions that
+// have gone inactive, and drop the clients of a core instance that is no longer
+// running. The second half matters most to an embedded host, which stops and
+// starts cores inside one process: the pool is process-wide, so without it a
+// stopped core's clients stayed in it, and a new core with the same outbound
+// would find them there.
+func (m *clientManager) reap() {
+	var forced []dialerConf
+
+	m.RLock()
+	for k, c := range m.m {
+		force := c.instance != nil && !c.instance.IsRunning()
+		c.clean(force)
+		if force {
+			forced = append(forced, k)
+		}
+	}
+	m.RUnlock()
+
+	for i := range forced {
+		m.Lock()
+		delete(m.m, forced[i])
+		m.Unlock()
 	}
 }
 

@@ -19,6 +19,12 @@ package tun
 // passed over, and one that failed in this process is not tried again. On a
 // healthy machine the closed adapter is gone by the next start and identity 0 is
 // used every time, as upstream would.
+//
+// Upstream (since #6811) first tries to reuse a present adapter of the same name,
+// for users who create one beforehand with firewall rules of their own. This does
+// not: an embedded host never creates one, so the adapter found under its name is
+// its own previous one whose device has not gone — and WintunOpenAdapter waits 15 s
+// for that device's interface before failing, the very stall this file removes.
 
 import (
 	"context"

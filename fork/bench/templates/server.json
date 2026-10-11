@@ -1,0 +1,21 @@
+{
+  "log": {"loglevel": "warning", "error": "@DIR@/server.log"},
+  "inbounds": [
+    {
+      "tag": "vless-in", "listen": "10.99.0.1", "port": 443, "protocol": "vless",
+      "settings": {"clients": [{"id": "@UUID@", "flow": "xtls-rprx-vision"}], "decryption": "none"},
+      "streamSettings": {"network": "tcp", "security": "reality",
+        "realitySettings": {"target": "10.99.1.1:443", "serverNames": ["www.example.com"],
+          "privateKey": "@PRIV@", "shortIds": ["a1b2"]}}
+    },
+    {
+      "tag": "hy-in", "listen": "10.99.0.1", "port": 8443, "protocol": "hysteria",
+      "settings": {"version": 2, "clients": [{"auth": "@UUID@"}]},
+      "streamSettings": {"network": "hysteria", "security": "tls",
+        "tlsSettings": {"alpn": ["h3"], "certificates": [{"certificateFile": "@DIR@/node.crt", "keyFile": "@DIR@/node.key"}]},
+        "hysteriaSettings": {"version": 2},
+        "finalmask": {"udp": [{"type": "salamander", "settings": {"password": "OBFS"}}]}}
+    }
+  ],
+  "outbounds": [{"protocol": "freedom", "tag": "direct", "settings": {"finalRules": [{"action": "allow", "ip": ["10.99.1.1/32"]}]}}]
+}

@@ -13,27 +13,39 @@ index 07b8f6d9..c902c10a 100644
  			return
  		}
 diff --git a/transport/internet/hysteria/dialer.go b/transport/internet/hysteria/dialer.go
-index 5a32f816..02de02ae 100644
+index 6ff19c23..0595bc57 100644
 --- a/transport/internet/hysteria/dialer.go
 +++ b/transport/internet/hysteria/dialer.go
-@@ -276,14 +276,7 @@ type clientManager struct {
+@@ -284,26 +284,7 @@ type clientManager struct {
  }
  
  func (m *clientManager) clean() {
 -	ticker := time.NewTicker(idleCleanupInterval)
 -	for range ticker.C {
+-		var forced []dialerConf
+-
 -		m.RLock()
--		for _, c := range m.m {
--			c.clean()
+-		for k, c := range m.m {
+-			force := c.instance != nil && !c.instance.IsRunning()
+-			c.clean(force)
+-			if force {
+-				forced = append(forced, k)
+-			}
 -		}
 -		m.RUnlock()
+-
+-		for i := range forced {
+-			m.Lock()
+-			delete(m.m, forced[i])
+-			m.Unlock()
+-		}
 -	}
 +	forkCleanClients(m) // fork: pause- and idle-aware reaper, see fork_pause.go
  }
  
  var (
-@@ -326,6 +319,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
- 			manager.m[dialerConf{dest, streamSettings}] = c
+@@ -349,6 +330,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+ 			manager.m[dialerConfKey] = c
  		}
  		manager.Unlock()
 +

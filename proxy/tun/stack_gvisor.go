@@ -101,7 +101,7 @@ func (t *stackGVisor) Start() error {
 	// Use custom UDP packet handler, instead of strict gVisor forwarder, for FullCone NAT support
 	udpForwarder := newUdpConnectionHandler(t.handler.HandleConnection, t.writeRawUDPPacket)
 	ipStack.SetTransportProtocolHandler(udp.ProtocolNumber, func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
-		data := pkt.Clone().Data().AsRange().ToSlice()
+		data := pkt.Data().AsRange().ToSlice()
 		// if len(data) == 0 {
 		// 	return false
 		// }
@@ -111,7 +111,9 @@ func (t *stackGVisor) Start() error {
 		srcIP := net.IPAddress(id.RemoteAddress.AsSlice())
 		dstIP := net.IPAddress(id.LocalAddress.AsSlice())
 		if srcIP == nil || dstIP == nil {
-			panic(id)
+			// fork: dropped, not panic(id). This runs on a gVisor goroutine, so a
+			// panic here is not recoverable and, in an embedded core, ends the host.
+			return true
 		}
 		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
 		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))
@@ -120,6 +122,12 @@ func (t *stackGVisor) Start() error {
 	})
 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, t.handleICMPv4Packet)
 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, t.handleICMPv6Packet)
+
+	// fork: only now may packets arrive (fork_stack_order.go).
+	if err := attachNIC(ipStack, linkEndpoint); err != nil {
+		ipStack.Close()
+		return err
+	}
 
 	t.stack = ipStack
 	t.endpoint = linkEndpoint
@@ -212,25 +220,8 @@ func createStack(ep stack.LinkEndpoint) (*stack.Stack, error) {
 		HandleLocal:        false,
 	}
 	gStack := stack.New(opts)
-
-	err := gStack.CreateNIC(defaultNIC, ep)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
-
-	gStack.SetRouteTable([]tcpip.Route{
-		{Destination: header.IPv4EmptySubnet, NIC: defaultNIC},
-		{Destination: header.IPv6EmptySubnet, NIC: defaultNIC},
-	})
-
-	err = gStack.SetSpoofing(defaultNIC, true)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
-	err = gStack.SetPromiscuousMode(defaultNIC, true)
-	if err != nil {
-		return nil, errors.New(err.String())
-	}
+	// fork: the NIC is attached by Start, after the handlers (fork_stack_order.go).
+	var err tcpip.Error
 
 	cOpt := tcpip.CongestionControlOption("cubic")
 	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &cOpt)

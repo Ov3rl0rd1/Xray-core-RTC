@@ -34,7 +34,7 @@ func NewSelfDrivenInboundHandler(ctx context.Context, tag string, receiverConfig
 	}
 	p, ok := rawProxy.(proxy.SelfDrivenInbound)
 	if !ok {
-		return nil, errors.New("not a self-driven inbound proxy").AtError()
+		return nil, errors.New("not a self-driven inbound proxy")
 	}
 	return &SelfDrivenInboundHandler{
 		tag:            tag,

@@ -16,3 +16,5 @@
 0004-ci-asset-fallbacks         .github/workflows/release.yml .github/workflows/release-win7.yml .github/workflows/test.yml
 0005-gitignore                  .gitignore
 0006-fork-api-service          infra/conf/api.go
+0007-tun-embedded-lifecycle    proxy/tun/handler.go proxy/tun/tun_windows.go proxy/tun/stack_gvisor.go
+0008-local-ip-cache-refresh    common/net/net.go

@@ -30,6 +30,7 @@ var localIPCache = atomic.Pointer[localIPCacheEntry]{}
 
 func IsLocal(ip net.IP) (bool, error) {
 	var addrs []net.Addr
+	var fresh bool
 	if entry := localIPCache.Load(); entry == nil || time.Since(entry.lastUpdate) > time.Minute {
 		var err error
 		addrs, err = net.InterfaceAddrs()
@@ -40,15 +41,35 @@ func IsLocal(ip net.IP) (bool, error) {
 			addrs:      addrs,
 			lastUpdate: time.Now(),
 		})
+		fresh = true
 	} else {
 		addrs = entry.addrs
+		// fork: a miss on a cache more than a moment old is re-checked. A TUN
+		// created after the cache was filled is otherwise "not local" for up to a
+		// minute, and every process routing rule silently stops matching.
+		fresh = time.Since(entry.lastUpdate) < 2*time.Second
 	}
+	if containsIP(addrs, ip) {
+		return true, nil
+	}
+	if fresh {
+		return false, nil
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false, err
+	}
+	localIPCache.Store(&localIPCacheEntry{addrs: addrs, lastUpdate: time.Now()})
+	return containsIP(addrs, ip), nil
+}
+
+func containsIP(addrs []net.Addr, ip net.IP) bool {
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok {
 			if ipnet.IP.Equal(ip) {
-				return true, nil
+				return true
 			}
 		}
 	}
-	return false, nil
+	return false
 }

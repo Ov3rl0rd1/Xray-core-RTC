@@ -42,6 +42,15 @@ proxy/tun/fork_identity.go
 proxy/tun/fork_bind_test.go
 proxy/tun/fork_tracker_test.go
 proxy/tun/fork_identity_test.go
+proxy/tun/fork_pin.go
+proxy/tun/fork_pin_windows.go
+proxy/tun/fork_pin_other.go
+proxy/tun/fork_pin_test.go
+proxy/tun/fork_pin_linux_test.go
+proxy/tun/fork_loop.go
+proxy/tun/fork_loop_windows.go
+proxy/tun/fork_loop_other.go
+proxy/tun/fork_loop_test.go
 common/session/fork_routed.go
 
 # ── libxray: the C ABI the mobile client links against ─────────────────────

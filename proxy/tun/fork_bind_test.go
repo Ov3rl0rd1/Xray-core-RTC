@@ -13,16 +13,25 @@ func controllers() int {
 }
 
 // An embedded core is started and stopped many times in one process; the
-// dialer controller must be registered once, not once per start.
-func TestBindingRegistersOneControllerForTheProcess(t *testing.T) {
-	before := controllers()
-	for i := 0; i < 5; i++ {
+// dialer controllers (the pin, and the loop watcher that goes with it) must be
+// registered once, not once per start.
+func TestBindingRegistersItsControllersOncePerProcess(t *testing.T) {
+	start := func() {
 		u := &InterfaceUpdater{tunIndex: -1}
 		bindOutbounds(u)
 		unbindOutbounds(u)
 	}
-	if got := controllers() - before; got > 1 {
-		t.Fatalf("%d controllers registered by 5 starts", got)
+	before := controllers()
+	start()
+	first := controllers()
+	if first-before > 2 {
+		t.Fatalf("%d controllers registered by one start", first-before)
+	}
+	for i := 0; i < 5; i++ {
+		start()
+	}
+	if got := controllers(); got != first {
+		t.Fatalf("%d more controllers registered by 5 more starts", got-first)
 	}
 	if activeBind.Load() != nil {
 		t.Fatal("binding still active after unbind")

@@ -182,6 +182,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 		return
 	}
 	source := net.DestinationFromAddr(remote)
+	if refuseLooped(source, destination) { // fork: one of the core's own sockets, routed back in; see fork_loop.go
+		return
+	}
 	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
 	defer untrack()
 	isUDP := destination.Network == net.Network_UDP

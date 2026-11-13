@@ -17,11 +17,16 @@ package tun
 // another one. Controller errors are only logged by the dialer, so refusing has
 // to be done by binding: a socket pinned to the loopback interface cannot reach
 // anything remote, and the dial fails where it would otherwise have looped.
+//
+// The same holds when the interface is there but will not take the socket, or
+// one address family of it — see fork_pin.go. Nothing leaves this file unpinned
+// without a Warning saying so.
 
 import (
 	"context"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +39,7 @@ import (
 var (
 	bindOnce   sync.Once
 	activeBind atomic.Pointer[InterfaceUpdater]
+	bindWarned bindSaid
 )
 
 // bindOutbounds makes u the interface every outbound socket is pinned to, for as
@@ -41,6 +47,8 @@ var (
 func bindOutbounds(u *InterfaceUpdater) {
 	updater = u // upstream's global, read by the route-change callbacks
 	u.Update()
+	bindWarned.reset()
+	watchOwnSockets() // and should the pin not hold, the loop is seen: fork_loop.go
 	activeBind.Store(u)
 	notifyBinding(true)
 	bindOnce.Do(func() {
@@ -81,56 +89,81 @@ func bindController(network, address string, c syscall.RawConn) error {
 	return BindSocket(network, address, c, u)
 }
 
-// BindSocket pins one socket to the current physical interface, or to loopback
-// when there is none. Exported for transports that open sockets outside the
-// core's dialer (olcRTC's WebRTC stack).
+// BindSocket pins one socket to the current physical interface. What cannot be
+// pinned there — everything when there is no such interface, one address family
+// when the interface will not take it — is pinned to loopback instead, and the
+// dial that needed it gets an error. Exported for transports that open sockets
+// outside the core's dialer (olcRTC's WebRTC stack).
 func BindSocket(network, address string, c syscall.RawConn, u *InterfaceUpdater) error {
 	if u == nil {
 		if u = activeBind.Load(); u == nil {
 			return nil
 		}
 	}
+	iface := physicalInterface(u)
+	var out pinOutcome
+	if err := c.Control(func(fd uintptr) {
+		out = pinEach(pinTargets(network, address, fd), iface, loopbackInterface())
+	}); err != nil {
+		return err
+	}
+	announce(out, iface)
+	return out.verdict(network, address, iface)
+}
+
+func physicalInterface(u *InterfaceUpdater) *net.Interface {
 	iface := u.Get()
 	if iface == nil {
 		// The route callback may simply not have run yet; ask once more.
 		u.Update()
 		iface = u.Get()
 	}
-	refused := iface == nil
-	if refused {
-		iface = loopbackInterface()
-		if iface == nil {
-			return errors.New("[tun] no physical interface and no loopback to refuse with")
-		}
-	}
-	var setErr error
-	if err := c.Control(func(fd uintptr) {
-		setErr = setinterface(network, address, fd, iface)
-	}); err != nil {
-		return err
-	}
-	if refused {
-		return errors.New("[tun] no physical interface; refusing ", address, " rather than looping it into the TUN")
-	}
-	return setErr
+	return iface
 }
 
-func loopbackInterface() *net.Interface {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
+// announce says at Warning, once per interface and family, what was refused or
+// left open. The dialer logs a controller's error at Info, which a client that
+// runs the core at "warning" never sees — and this is the line that explains
+// why a direct connection does not work.
+func announce(out pinOutcome, iface *net.Interface) {
+	if len(out.refused) == 0 && len(out.open) == 0 {
+		return
 	}
-	for i := range ifaces {
-		if ifaces[i].Flags&net.FlagLoopback != 0 {
-			return &ifaces[i]
+	index, name := 0, "no physical interface"
+	if iface != nil {
+		index, name = iface.Index, iface.Name+" (#"+strconv.Itoa(iface.Index)+")"
+	}
+	for _, family := range out.open {
+		if bindWarned.first(index, "open "+family) {
+			errors.LogWarningInner(context.Background(), out.cause, "[tun] ", familyList([]string{family}),
+				" of the core's sockets can be pinned neither to ", name,
+				" nor to loopback: such a socket follows the route table, and what it carries may come back into the TUN")
 		}
 	}
-	return nil
+	if iface == nil {
+		if len(out.refused) > 0 && bindWarned.first(0, "none") {
+			errors.LogWarning(context.Background(), "[tun] no physical interface to pin the core's sockets to; they are refused rather than looped into the TUN")
+		}
+		return
+	}
+	for _, family := range out.refused {
+		if !bindWarned.first(index, family) {
+			continue
+		}
+		if family == wholeSocket {
+			errors.LogWarningInner(context.Background(), out.cause, "[tun] the core's sockets cannot be pinned to ", name,
+				"; direct connections are refused while it is the way out, rather than looped into the TUN")
+			continue
+		}
+		errors.LogWarningInner(context.Background(), out.cause, "[tun] ", family, " cannot be pinned to ", name,
+			": the interface does not carry ", family, " (on Windows, the protocol is unticked on the adapter). Direct ", family,
+			" connections are refused while it is the way out, rather than looped into the TUN; the other address family is not affected")
+	}
 }
 
 // BindFD is BindSocket for code that only has the descriptor (olcRTC's
-// protector callback). It reports false when the socket was refused — pinned to
-// loopback because no physical interface exists — so the caller can fail the
+// protector callback). It reports false when the socket was refused — nothing
+// of it could be pinned to a physical interface — so the caller can fail the
 // dial early instead of waiting for it to time out. With no TUN running it does
 // nothing and reports true.
 func BindFD(fd uintptr) bool {
@@ -138,22 +171,14 @@ func BindFD(fd uintptr) bool {
 	if u == nil {
 		return true
 	}
-	iface := u.Get()
-	if iface == nil {
-		u.Update()
-		iface = u.Get()
+	iface := physicalInterface(u)
+	targets := pinTargets("", "", fd)
+	if len(targets) == 0 {
+		return true // not an IP socket: nothing to pin, nothing that could loop
 	}
-	refused := iface == nil
-	if refused {
-		if iface = loopbackInterface(); iface == nil {
-			return false
-		}
-	}
-	// "tcp6" selects both address families' options on every platform that
-	// distinguishes them. The family the socket does not have fails, and that is
-	// expected, so the result is not an error signal.
-	_ = setinterface("tcp6", "", fd, iface)
-	return !refused
+	out := pinEach(targets, iface, loopbackInterface())
+	announce(out, iface)
+	return iface != nil && out.usable(len(targets))
 }
 
 var (

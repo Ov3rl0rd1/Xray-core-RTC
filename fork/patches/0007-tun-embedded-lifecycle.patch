@@ -1,5 +1,5 @@
 diff --git a/proxy/tun/handler.go b/proxy/tun/handler.go
-index c13625b0..6816c15e 100644
+index c13625b0..5f6dc195 100644
 --- a/proxy/tun/handler.go
 +++ b/proxy/tun/handler.go
 @@ -2,9 +2,6 @@ package tun
@@ -58,16 +58,19 @@ index c13625b0..6816c15e 100644
  	}
  
  	errors.LogInfo(t.ctx, tunName, " created")
-@@ -202,6 +182,8 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+@@ -202,6 +182,11 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
  		return
  	}
  	source := net.DestinationFromAddr(remote)
++	if refuseLooped(source, destination) { // fork: one of the core's own sockets, routed back in; see fork_loop.go
++		return
++	}
 +	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
 +	defer untrack()
  	isUDP := destination.Network == net.Network_UDP
  	if !isUDP && (t.uplinkCounter != nil || t.downlinkCounter != nil) {
  		conn = &stat.CounterConnection{
-@@ -255,7 +237,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+@@ -255,7 +240,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
  
  // Close implements common.Closable.
  func (t *Handler) Close() error {

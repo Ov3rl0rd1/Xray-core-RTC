@@ -40,11 +40,13 @@ Everything Go here builds only with `-tags bench`, so `go build ./...` never see
 | `HARGS="-restart 7s" run-tun.sh …` | What a full core restart costs (the old recovery path). |
 | `chaos-udpblock.sh 10 8 & run-tun.sh $BENCH/client-tun-hy.json -d 40s` | An ISP throttling QUIC for 8 s: does Hysteria2 come back by itself? |
 | `race-live.sh` | Race detector over the live-control API (list/close/reload/swap) under load, with the instance restarted every 7 s. |
+| `loop.sh` | A pin that does not hold: with none of the core's sockets pinned, does one datagram stay one connection? (`templates/loop.json`; needs no node.) |
 | `ctl.sh start $BENCH/proc-hy.json`, `ctl.sh send conns` … | Poke the live API by hand: `conns`, `close <ids\|*>`, `reload <file>`, `swap <file>`, `restart`, `stats`. |
 
 Config variants in `templates/`: `client-*` (SOCKS-only), `client-tun-*` (TUN), `proc-hy`
-(TUN with process routing), `failclosed` (no physical interface to bind to), `mtu` (MTU 9000),
-`ob-*` (outbounds for `swap`), `routing-load-direct` (rules for `reload`).
+(TUN with process routing), `failclosed` (no physical interface to bind to), `loop` (everything
+direct and nothing pinned), `mtu` (MTU 9000), `ob-*` (outbounds for `swap`),
+`routing-load-direct` (rules for `reload`).
 
 ## Reading the output
 
@@ -71,6 +73,17 @@ count that grows across restarts is a leak (it did, before `fork_bind.go`).
 - An 8 s UDP block heals by itself about 2 s after it lifts; nothing for the client to do.
 - MTU 9000 on the TUN: 2.4× bulk throughput (493 vs 206 MB/s) but game p99 under a parallel
   download 12 ms vs 7.9 ms — hence 1500 by default and 9000 as an opt-in "speed mode".
+
+## What it found (Nov 2026)
+
+- A socket of the core's that is not pinned comes back into the TUN, and every turn opens
+  another: `loop.sh` before the fix took **11 879 UDP and 8 118 TCP connections in four seconds
+  from one datagram and one connect** (60 000 goroutines, 488 MB). In the field this was
+  Windows with IPv6 unticked on the adapter — `IPV6_UNICAST_IF` answered `WSAEINVAL`, the dialer
+  logged it at Info and used the socket — and it ended with the machine out of ephemeral ports.
+  Two fixes: a family that cannot be pinned is sealed to loopback (`proxy/tun/fork_pin.go`), and
+  a connection that reaches the TUN from one of the core's own sockets is dropped
+  (`proxy/tun/fork_loop.go`). After: one connection each, every run.
 
 The race build disables `checkptr`: upstream VLESS Vision stores a `uintptr` and converts it
 back, which `checkptr` rejects on the first Vision connection. Not a production crash (the

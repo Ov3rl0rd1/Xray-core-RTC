@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 const (
@@ -90,7 +91,19 @@ func (o pinOutcome) usable(count int) bool {
 // verdict is what the dial is told. Only a refusal of the family the dial needs
 // is an error: a socket with its IPv6 sealed serves an IPv4 destination as
 // well as it ever did.
+//
+// The error is an *internet.BindError. Since v26.11 the dialer cancels the dial
+// on a controller's error (#7173), and on Windows retries a dual-stack UDP
+// socket as one of the destination's family when the error is a bind error
+// (#7214) — which then only has the family it needs to pin.
 func (o pinOutcome) verdict(network, address string, iface *net.Interface) error {
+	if err := o.refusal(address, iface); err != nil {
+		return internet.NewBindError(err)
+	}
+	return nil
+}
+
+func (o pinOutcome) refusal(address string, iface *net.Interface) error {
 	if len(o.open) > 0 {
 		where := "loopback"
 		if iface != nil {
@@ -113,8 +126,9 @@ func (o pinOutcome) verdict(network, address string, iface *net.Interface) error
 }
 
 // familyOf names the family a dial to address needs, or "" when the address
-// does not say. For the dialer's UDP sockets the address is the local wildcard,
-// which it picks by the destination's family.
+// does not say. The dialer passes the destination, for UDP as well since v26.11
+// (#7201); before that a UDP socket came with the local wildcard, which the
+// dialer picked by the destination's family, so either way the family is right.
 func familyOf(address string) string {
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {

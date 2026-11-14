@@ -53,6 +53,25 @@ func (w *tunUDPStatsWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 	return nil
 }
 
+// TCPWriter is the writing side of a TCP connection of the stack for the dispatcher. It has no Close: the outbound
+// closes its writer when the other side has no more to send, and the system may still be sending
+type TCPWriter struct {
+	Writer buf.Writer
+	// Counter counts what is written, if there is one
+	Counter stats.Counter
+}
+
+func (w *TCPWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	size := mb.Len()
+	if err := w.Writer.WriteMultiBuffer(mb); err != nil {
+		return err
+	}
+	if w.Counter != nil {
+		w.Counter.Add(int64(size))
+	}
+	return nil
+}
+
 // ConnectionHandler interface with the only method that stack is going to push new connections to
 type ConnectionHandler interface {
 	HandleConnection(conn net.Conn, destination net.Destination)
@@ -123,6 +142,7 @@ func (t *Handler) Start() error {
 
 	tunStackOptions := StackOptions{
 		Tun:         tunInterface,
+		MTU:         t.config.MTU,
 		IdleTimeout: t.policyManager.ForLevel(t.config.UserLevel).Timeouts.ConnectionIdle,
 	}
 	tunStack, err := NewStack(t.ctx, tunStackOptions, t)
@@ -174,27 +194,12 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 	defer cancel()
 	ctx = c.ContextWithID(ctx, session.NewID())
 
-	// if the connection is already closed, conn.RemoteAddr() will be nil
-	// due to gvisor weird behavior
-	remote := conn.RemoteAddr()
-	if remote == nil {
-		errors.LogInfo(t.ctx, "dropped quickly closed connection")
-		return
-	}
-	source := net.DestinationFromAddr(remote)
+	source := net.DestinationFromAddr(conn.RemoteAddr())
 	if refuseLooped(source, destination) { // fork: one of the core's own sockets, routed back in; see fork_loop.go
 		return
 	}
 	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
 	defer untrack()
-	isUDP := destination.Network == net.Network_UDP
-	if !isUDP && (t.uplinkCounter != nil || t.downlinkCounter != nil) {
-		conn = &stat.CounterConnection{
-			Connection:   conn,
-			ReadCounter:  t.uplinkCounter,
-			WriteCounter: t.downlinkCounter,
-		}
-	}
 
 	inbound := session.Inbound{
 		Name:          "tun",
@@ -220,13 +225,13 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 	})
 	errors.LogInfo(ctx, "processing from ", source, " to ", destination)
 
-	reader := &buf.TimeoutWrapperReader{Reader: buf.NewReader(conn)}
+	// both kinds of connection are buf.Reader and buf.Writer, what they carry is counted on the way
+	reader := &buf.TimeoutWrapperReader{Reader: buf.NewReader(conn), Counter: t.uplinkCounter}
 	writer := buf.NewWriter(conn)
-	if isUDP {
-		reader.Counter = t.uplinkCounter
-		if t.downlinkCounter != nil {
-			writer = &tunUDPStatsWriter{writer: writer, counter: t.downlinkCounter}
-		}
+	if destination.Network != net.Network_UDP {
+		writer = &TCPWriter{Writer: writer, Counter: t.downlinkCounter}
+	} else if t.downlinkCounter != nil {
+		writer = &tunUDPStatsWriter{writer: writer, counter: t.downlinkCounter}
 	}
 
 	link := &transport.Link{

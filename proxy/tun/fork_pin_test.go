@@ -1,10 +1,13 @@
 package tun
 
 import (
+	go_errors "errors"
 	"net"
 	"slices"
 	"syscall"
 	"testing"
+
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 var (
@@ -136,5 +139,27 @@ func TestARefusalIsWarnedAboutOncePerInterface(t *testing.T) {
 	said.reset()
 	if !said.first(4, "IPv6") {
 		t.Fatal("a new TUN does not announce again")
+	}
+}
+
+// Since v26.11 the dialer cancels a dial whose controller fails, and on Windows
+// retries a dual-stack UDP socket as a single-family one when the failure is a
+// *BindError (#7173, #7214). A refusal has to be one, or the retry that serves an
+// IPv4 destination from a machine without IPv6 never happens.
+func TestARefusalIsABindErrorTheDialerUnderstands(t *testing.T) {
+	for _, out := range []pinOutcome{
+		{refused: []string{"IPv6"}, cause: syscall.EINVAL},
+		{open: []string{"IPv6"}, cause: syscall.EINVAL},
+		{refused: []string{wholeSocket}},
+	} {
+		iface := testPhysical
+		if slices.Contains(out.refused, wholeSocket) {
+			iface = nil
+		}
+		err := out.verdict("udp6", "[2001:db8::1]:443", iface)
+		var bind *internet.BindError
+		if !go_errors.As(err, &bind) {
+			t.Errorf("%+v: %v is not a BindError", out, err)
+		}
 	}
 }

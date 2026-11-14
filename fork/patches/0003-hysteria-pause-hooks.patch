@@ -1,8 +1,8 @@
 diff --git a/transport/internet/hysteria/conn.go b/transport/internet/hysteria/conn.go
-index 07b8f6d9..c902c10a 100644
+index 5e801eed..3d763b30 100644
 --- a/transport/internet/hysteria/conn.go
 +++ b/transport/internet/hysteria/conn.go
-@@ -172,7 +172,8 @@ func (m *udpSessionManager) clean() {
+@@ -190,7 +190,8 @@ func (m *udpSessionManager) clean() {
  	ticker := time.NewTicker(idleCleanupInterval)
  	defer ticker.Stop()
  
@@ -13,38 +13,36 @@ index 07b8f6d9..c902c10a 100644
  			return
  		}
 diff --git a/transport/internet/hysteria/dialer.go b/transport/internet/hysteria/dialer.go
-index 6ff19c23..0595bc57 100644
+index a6eed34c..2bc473d2 100644
 --- a/transport/internet/hysteria/dialer.go
 +++ b/transport/internet/hysteria/dialer.go
-@@ -284,26 +284,7 @@ type clientManager struct {
+@@ -299,24 +299,7 @@ type clientManager struct {
  }
  
  func (m *clientManager) clean() {
 -	ticker := time.NewTicker(idleCleanupInterval)
 -	for range ticker.C {
--		var forced []dialerConf
--
 -		m.RLock()
+-		entries := make(map[dialerConf]*client, len(m.m))
 -		for k, c := range m.m {
+-			entries[k] = c
+-		}
+-		m.RUnlock()
+-		for k, c := range entries {
 -			force := c.instance != nil && !c.instance.IsRunning()
 -			c.clean(force)
 -			if force {
--				forced = append(forced, k)
+-				m.Lock()
+-				delete(m.m, k)
+-				m.Unlock()
 -			}
--		}
--		m.RUnlock()
--
--		for i := range forced {
--			m.Lock()
--			delete(m.m, forced[i])
--			m.Unlock()
 -		}
 -	}
 +	forkCleanClients(m) // fork: pause- and idle-aware reaper, see fork_pause.go
  }
  
  var (
-@@ -349,6 +330,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+@@ -363,6 +346,8 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
  			manager.m[dialerConfKey] = c
  		}
  		manager.Unlock()

@@ -68,7 +68,7 @@ index 2a641e77..627ecbe3 100644
          run: |
            mv -f resources/geo* build_assets/
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
-index 2bbe698c..0a4fc49c 100644
+index 6aba42dc..391bc705 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
 @@ -1,16 +1,21 @@
@@ -159,10 +159,10 @@ index 2bbe698c..0a4fc49c 100644
          run: |
            mv -f resources/geo* build_assets/
 diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
-index 7db35743..95da9873 100644
+index 0d91db0b..be33845d 100644
 --- a/.github/workflows/test.yml
 +++ b/.github/workflows/test.yml
-@@ -93,5 +93,26 @@ jobs:
+@@ -78,5 +78,26 @@ jobs:
            path: resources
            key: xray-geodat-
            enableCrossOsArchive: true

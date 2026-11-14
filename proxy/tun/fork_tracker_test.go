@@ -103,3 +103,29 @@ func find(t *testing.T, src net.Destination) ConnectionInfo {
 	t.Fatalf("%v not tracked", src)
 	return ConnectionInfo{}
 }
+
+// The TCP connections of upstream's own stack move buffers too; the tracker
+// must not turn them into a plain net.Conn.
+func TestTrackerKeepsTheBufferInterfaceOfATCPConnection(t *testing.T) {
+	src := net.TCPDestination(net.ParseAddress("198.18.0.1"), 50001)
+	dst := net.TCPDestination(net.ParseAddress("1.2.3.4"), 443)
+	inner := &fakePacketConn{in: make(chan buf.MultiBuffer, 1)}
+
+	_, conn, untrack := trackConnection(context.Background(), func() {}, inner, src, dst)
+	defer untrack()
+
+	if _, ok := conn.(buf.Reader); !ok {
+		t.Fatal("wrapped TCP connection lost buf.Reader")
+	}
+	if _, ok := conn.(buf.Writer); !ok {
+		t.Fatal("wrapped TCP connection lost buf.Writer")
+	}
+	b := buf.New()
+	b.Write(make([]byte, 300))
+	if err := conn.(buf.Writer).WriteMultiBuffer(buf.MultiBuffer{b}); err != nil {
+		t.Fatal(err)
+	}
+	if got := find(t, src); got.Down != 300 || got.Network != "tcp" {
+		t.Fatalf("counted %+v", got)
+	}
+}

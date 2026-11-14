@@ -70,10 +70,12 @@ func trackConnection(ctx context.Context, cancel context.CancelFunc, conn net.Co
 		trackMu.Unlock()
 	}
 
-	// The UDP side is a packet connection whose buffers carry their own
-	// destination — that is what full-cone NAT is made of — so the wrapper must
-	// keep the MultiBuffer interface, or every reply would be addressed to the
-	// first destination.
+	// Both kinds of connection of the stack move whole buffers, and the wrapper
+	// must keep that. A UDP buffer carries its own destination — that is what
+	// full-cone NAT is made of — and without the MultiBuffer interface every
+	// reply would be addressed to the first one. A TCP connection of upstream's
+	// own stack (v26.11) reads large segments straight into the core's buffers,
+	// a path a plain net.Conn would lose.
 	if pc, ok := conn.(packetConn); ok {
 		return ctx, &countedPacketConn{packetConn: pc, e: e}, untrack
 	}

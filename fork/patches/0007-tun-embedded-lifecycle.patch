@@ -1,5 +1,5 @@
 diff --git a/proxy/tun/handler.go b/proxy/tun/handler.go
-index c13625b0..5f6dc195 100644
+index 59b643b5..57eae7d4 100644
 --- a/proxy/tun/handler.go
 +++ b/proxy/tun/handler.go
 @@ -2,9 +2,6 @@ package tun
@@ -28,7 +28,7 @@ index c13625b0..5f6dc195 100644
  }
  
  type tunUDPStatsWriter struct {
-@@ -117,26 +114,9 @@ func (t *Handler) Start() error {
+@@ -136,31 +133,9 @@ func (t *Handler) Start() error {
  		if t.config.AutoOutboundsInterface == "auto" {
  			t.config.AutoOutboundsInterface = ""
  		}
@@ -40,7 +40,8 @@ index c13625b0..5f6dc195 100644
 -				errors.LogInfo(context.Background(), "[tun] falied to set interface > iface == nil")
 -				return errors.New("iface not found")
 -			}
--			return c.Control(func(fd uintptr) {
+-			var controlErr, sockErr error
+-			controlErr = c.Control(func(fd uintptr) {
 -				addrPort, _ := netip.ParseAddrPort(address)
 -				// skip loopback
 -				if addrPort.Addr().IsLoopback() || strings.HasPrefix(strings.ToLower(address), "localhost:") {
@@ -48,9 +49,13 @@ index c13625b0..5f6dc195 100644
 -				}
 -				err := setinterface(network, address, fd, iface)
 -				if err != nil {
--					errors.LogInfoInner(context.Background(), err, "[tun] falied to set interface")
+-					sockErr = errors.New("[tun] falied to set interface").Base(err)
 -				}
 -			})
+-			if sockErr != nil {
+-				return sockErr
+-			}
+-			return controlErr
 -		})
 +		// fork: registered once per process and fail-closed; see fork_bind.go.
 +		t.bound = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
@@ -58,19 +63,19 @@ index c13625b0..5f6dc195 100644
  	}
  
  	errors.LogInfo(t.ctx, tunName, " created")
-@@ -202,6 +182,11 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
- 		return
- 	}
- 	source := net.DestinationFromAddr(remote)
+@@ -220,6 +195,11 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+ 	ctx = c.ContextWithID(ctx, session.NewID())
+ 
+ 	source := net.DestinationFromAddr(conn.RemoteAddr())
 +	if refuseLooped(source, destination) { // fork: one of the core's own sockets, routed back in; see fork_loop.go
 +		return
 +	}
 +	ctx, conn, untrack := trackConnection(ctx, cancel, conn, source, destination) // fork: see fork_tracker.go
 +	defer untrack()
- 	isUDP := destination.Network == net.Network_UDP
- 	if !isUDP && (t.uplinkCounter != nil || t.downlinkCounter != nil) {
- 		conn = &stat.CounterConnection{
-@@ -255,7 +240,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
+ 
+ 	inbound := session.Inbound{
+ 		Name:          "tun",
+@@ -265,7 +245,9 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
  
  // Close implements common.Closable.
  func (t *Handler) Close() error {
@@ -81,64 +86,8 @@ index c13625b0..5f6dc195 100644
  }
  
  // Network implements proxy.Inbound
-diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
-index de173511..ad675763 100644
---- a/proxy/tun/stack_gvisor.go
-+++ b/proxy/tun/stack_gvisor.go
-@@ -111,7 +111,9 @@ func (t *stackGVisor) Start() error {
- 		srcIP := net.IPAddress(id.RemoteAddress.AsSlice())
- 		dstIP := net.IPAddress(id.LocalAddress.AsSlice())
- 		if srcIP == nil || dstIP == nil {
--			panic(id)
-+			// fork: dropped, not panic(id). This runs on a gVisor goroutine, so a
-+			// panic here is not recoverable and, in an embedded core, ends the host.
-+			return true
- 		}
- 		src := net.UDPDestination(srcIP, net.Port(id.RemotePort))
- 		dst := net.UDPDestination(dstIP, net.Port(id.LocalPort))
-@@ -121,6 +123,12 @@ func (t *stackGVisor) Start() error {
- 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, t.handleICMPv4Packet)
- 	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, t.handleICMPv6Packet)
- 
-+	// fork: only now may packets arrive (fork_stack_order.go).
-+	if err := attachNIC(ipStack, linkEndpoint); err != nil {
-+		ipStack.Close()
-+		return err
-+	}
-+
- 	t.stack = ipStack
- 	t.endpoint = linkEndpoint
- 
-@@ -212,25 +220,8 @@ func createStack(ep stack.LinkEndpoint) (*stack.Stack, error) {
- 		HandleLocal:        false,
- 	}
- 	gStack := stack.New(opts)
--
--	err := gStack.CreateNIC(defaultNIC, ep)
--	if err != nil {
--		return nil, errors.New(err.String())
--	}
--
--	gStack.SetRouteTable([]tcpip.Route{
--		{Destination: header.IPv4EmptySubnet, NIC: defaultNIC},
--		{Destination: header.IPv6EmptySubnet, NIC: defaultNIC},
--	})
--
--	err = gStack.SetSpoofing(defaultNIC, true)
--	if err != nil {
--		return nil, errors.New(err.String())
--	}
--	err = gStack.SetPromiscuousMode(defaultNIC, true)
--	if err != nil {
--		return nil, errors.New(err.String())
--	}
-+	// fork: the NIC is attached by Start, after the handlers (fork_stack_order.go).
-+	var err tcpip.Error
- 
- 	cOpt := tcpip.CongestionControlOption("cubic")
- 	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &cOpt)
 diff --git a/proxy/tun/tun_windows.go b/proxy/tun/tun_windows.go
-index 2045efa7..5953948c 100644
+index 1ff394e1..332bff85 100644
 --- a/proxy/tun/tun_windows.go
 +++ b/proxy/tun/tun_windows.go
 @@ -5,7 +5,6 @@ package tun
@@ -149,35 +98,7 @@ index 2045efa7..5953948c 100644
  	"encoding/binary"
  	go_errors "errors"
  	"net"
-@@ -16,6 +15,7 @@ import (
- 	"strconv"
- 	"strings"
- 	"sync"
-+	"sync/atomic"
- 	"syscall"
- 	"time"
- 	"unsafe"
-@@ -25,7 +25,6 @@ import (
- 	"golang.org/x/sys/windows"
- 	"golang.zx2c4.com/wintun"
- 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
--	"gvisor.dev/gvisor/pkg/buffer"
- 	"gvisor.dev/gvisor/pkg/tcpip"
- 	"gvisor.dev/gvisor/pkg/tcpip/stack"
- )
-@@ -52,6 +51,11 @@ type WindowsTun struct {
- 	skipStop chan struct{}
- 	skipDone chan struct{}
- 	closed   bool
-+
-+	// fork: the session is ended under in-flight reads and writes in an embedded
-+	// host that stops and starts the core; see fork_tun_windows.go.
-+	ending   atomic.Bool
-+	inflight atomic.Int32
- }
- 
- // WindowsTun implements Tun
-@@ -88,20 +92,7 @@ func NewTun(options *Config) (Tun, error) {
+@@ -83,20 +82,7 @@ func NewTun(options *Config) (Tun, error) {
  }
  
  func open(name, desc string) (*wintun.Adapter, error) {
@@ -198,61 +119,17 @@ index 2045efa7..5953948c 100644
 +	return forkOpenAdapter(name, desc) // fork: one GUID per name is not enough; see fork_open_windows.go
  }
  
- func (t *WindowsTun) Start() (err error) {
-@@ -337,6 +328,7 @@ func (t *WindowsTun) Close() error {
- 		return nil
+ // ipv6Off tells whether DisabledComponents turns IPv6 off on the non-tunnel
+@@ -591,7 +577,7 @@ func (t *WindowsTun) ReadPacket(b []byte) ([]byte, error) {
+ 			return nil, err
+ 		}
+ 		procyield(1)
+-		_, _ = windows.WaitForSingleObject(t.readWait, windows.INFINITE)
++		_, _ = windows.WaitForSingleObject(t.readWait, readWaitSlice) // fork: bounded; see fork_tun_windows.go
  	}
- 	t.closed = true
-+	t.drainBeforeEnd() // fork: no ring access may outlive the session
- 
- 	if t.cbr != nil {
- 		t.cbr.Unregister()
-@@ -509,11 +501,10 @@ func (t *WindowsTun) Index() (int, error) {
- 
- // WritePacket implements GVisorDevice method to write one packet to the tun device
- func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
--	t.RLock()
--	defer t.RUnlock()
--	if t.closed {
-+	if !t.enter() { // fork: see fork_tun_windows.go
- 		return &tcpip.ErrClosedForSend{}
- 	}
-+	defer t.leave()
- 
- 	// request buffer from Wintun
- 	packet, err := t.session.AllocateSendPacket(packetBuffer.Size())
-@@ -537,28 +528,11 @@ func (t *WindowsTun) WritePacket(packetBuffer *stack.PacketBuffer) tcpip.Error {
- // It is expected that the method will not block, rather return ErrQueueEmpty when there is nothing on the line,
- // which will make the stack call Wait which should implement desired push-back
- func (t *WindowsTun) ReadPacket() (byte, *stack.PacketBuffer, error) {
--	packet, err := t.session.ReceivePacket()
--	if go_errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
--		return 0, nil, ErrQueueEmpty
--	}
--	if err != nil {
--		return 0, nil, err
--	}
--
--	version := packet[0] >> 4
--	packetBuffer := buffer.MakeWithView(buffer.NewViewWithData(packet))
--	return version, stack.NewPacketBuffer(stack.PacketBufferOptions{
--		Payload:           packetBuffer,
--		IsForwardedPacket: true,
--		OnRelease: func() {
--			t.session.ReleaseReceivePacket(packet)
--		},
--	}), nil
-+	return t.forkReadPacket() // fork: see fork_tun_windows.go
  }
  
- func (t *WindowsTun) Wait() {
--	procyield(1)
--	_, _ = windows.WaitForSingleObject(t.readWait, windows.INFINITE)
-+	t.forkWait() // fork: see fork_tun_windows.go
- }
- 
- func (t *WindowsTun) newEndpoint() (stack.LinkEndpoint, error) {
-@@ -637,7 +611,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
+@@ -682,7 +668,11 @@ func findOutboundInterface(tunIndex int, fixedName string) (*net.Interface, erro
  			index = r[i].InterfaceIndex
  		}
  	}

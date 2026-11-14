@@ -152,23 +152,28 @@ func forkCleanClients(m *clientManager) {
 // starts cores inside one process: the pool is process-wide, so without it a
 // stopped core's clients stayed in it, and a new core with the same outbound
 // would find them there.
+//
+// As upstream does since v26.11 (2bea2df6), the clients are cleaned outside the
+// pool's lock: a client's own lock is held for as long as it is dialling, and a
+// reaper waiting on it with the pool locked held up every other dial.
 func (m *clientManager) reap() {
-	var forced []dialerConf
-
 	m.RLock()
+	entries := make(map[dialerConf]*client, len(m.m))
 	for k, c := range m.m {
-		force := c.instance != nil && !c.instance.IsRunning()
-		c.clean(force)
-		if force {
-			forced = append(forced, k)
-		}
+		entries[k] = c
 	}
 	m.RUnlock()
 
-	for i := range forced {
-		m.Lock()
-		delete(m.m, forced[i])
-		m.Unlock()
+	for k, c := range entries {
+		force := c.instance != nil && !c.instance.IsRunning()
+		c.clean(force)
+		if force {
+			m.Lock()
+			if m.m[k] == c {
+				delete(m.m, k)
+			}
+			m.Unlock()
+		}
 	}
 }
 
@@ -190,22 +195,26 @@ func CloseAllClients() int {
 		return 0
 	}
 
+	// Emptied under the pool's lock, closed outside it: a client being dialled
+	// holds its own lock until the dial returns, and waiting for that with the
+	// pool locked would hold up every other dial.
 	manager.Lock()
-	defer manager.Unlock()
-
-	closed := 0
+	clients := make([]*client, 0, len(manager.m))
 	for key, c := range manager.m {
-		c.Lock()
+		clients = append(clients, c)
+		delete(manager.m, key)
+	}
+	manager.Unlock()
+
+	for _, c := range clients {
+		c.lock <- struct{}{}
 		// A client that never completed a dial has no conn, and close would
 		// nil-dereference on it.
 		if c.status() != StatusNull {
 			c.close()
 		}
-		c.Unlock()
-
-		delete(manager.m, key)
-		closed++
+		c.unlock()
 	}
 
-	return closed
+	return len(clients)
 }

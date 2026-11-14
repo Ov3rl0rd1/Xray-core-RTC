@@ -68,7 +68,8 @@ count that grows across restarts is a leak (it did, before `fork_bind.go`).
   (7 after 6 restarts). Fixed in `proxy/tun/fork_bind.go`.
 - The gVisor stack attached its NIC before the TCP/UDP handlers existed: 47–54 data races per
   `race-live.sh` run, all in that start window, and packets in it were answered by gVisor
-  itself (RST / ICMP unreachable). Fixed in `proxy/tun/fork_stack_order.go`: 0–1 per run, the
+  itself (RST / ICMP unreachable). Fixed in `proxy/tun/fork_stack_order.go` (retired with
+  v26.11.9, whose own stack sets its handlers before it reads a packet): 0–1 per run, the
   one left being upstream Hysteria2's `udpSessionManager.closed` (benign).
 - An 8 s UDP block heals by itself about 2 s after it lifts; nothing for the client to do.
 - MTU 9000 on the TUN: 2.4× bulk throughput (493 vs 206 MB/s) but game p99 under a parallel
@@ -84,6 +85,15 @@ count that grows across restarts is a leak (it did, before `fork_bind.go`).
   Two fixes: a family that cannot be pinned is sealed to loopback (`proxy/tun/fork_pin.go`), and
   a connection that reaches the TUN from one of the core's own sockets is dropped
   (`proxy/tun/fork_loop.go`). After: one connection each, every run.
+
+## On upstream v26.11.9 (Nov 2026)
+
+Upstream replaced gVisor with its own TCP/IP stack. The same scenarios on the rebased fork:
+`loop.sh` one connection each, 3 runs of 3; game, long and churn load over VLESS, Hysteria2 and
+process routing with no stall, no broken long session and no failed connect; churn connect
+time 1.6 ms over Hysteria2 (2.8 ms on v26.10.10) and 16.6 ms with process routing (26.2 ms);
+`race-live.sh` with no race reported. Restarts and Hysteria2 session resets still break the
+long sessions they carry, as before — that is what those scenarios exist to show.
 
 The race build disables `checkptr`: upstream VLESS Vision stores a `uintptr` and converts it
 back, which `checkptr` rejects on the first Vision connection. Not a production crash (the
